@@ -1,0 +1,3 @@
+# Force LF everywhere. Without this, Git checks out CRLF on Windows and LF on
+# macOS, and you get diffs claiming every line changed when nothing did.
+* text=auto eol=lf
