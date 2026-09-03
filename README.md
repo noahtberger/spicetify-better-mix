@@ -38,6 +38,18 @@ mixes Spotify makes for you — it builds them in the background over a few
 minutes, and the rows show a counter while it works. After that it runs on its
 own.
 
+<details>
+<summary>Prefer the command line?</summary>
+
+```bash
+git clone https://github.com/noahtberger/spicetify-better-mix.git
+cp -r spicetify-better-mix/better-mix "$(spicetify path userdata)/CustomApps/better-mix"
+spicetify config custom_apps better-mix
+spicetify apply
+```
+
+</details>
+
 **Updating later:** download again, copy the folder over the old one, and run
 `spicetify apply`.
 
@@ -50,6 +62,10 @@ own.
   (which then syncs to your phone), rebuild, search and sort.
 - **Right-click any playlist** for a one-off better mix of it.
 - **Profile menu**: turn the automatic builds off, or put Spotify's rows back.
+
+Mixes live in Spotify on this computer, not in your Spotify account, so they
+won't show up on your phone. Save one and it becomes a normal playlist that
+does.
 
 ## How it decides
 
