@@ -81,4 +81,4 @@ Every track records which rule let it in, visible on hover in the tracklist.
 
 ---
 
-Thanks for using Better Mix. If you like it, please star the repo.
+Thanks for using Better Mix. If you like it, please star the repo ⭐
