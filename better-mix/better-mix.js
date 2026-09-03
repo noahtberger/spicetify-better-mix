@@ -1123,10 +1123,33 @@ window.__betterMixExtensionLoaded = true;
         <h2 class="hmx-heading">${esc(title)}</h2>
         <span><span class="hmx-progress"></span><button class="hmx-rebuild hmx-showall">Show all</button></span>
       </div>
-      <div class="hmx-strip"></div>`;
+      <div class="hmx-scroller">
+        <button class="hmx-arrow hmx-arrow-l" aria-label="Scroll left">${icon("chevron-left")}</button>
+        <div class="hmx-strip"></div>
+        <button class="hmx-arrow hmx-arrow-r" aria-label="Scroll right">${icon("chevron-right")}</button>
+      </div>`;
     row.querySelector(".hmx-showall").onclick = () => Spicetify.Platform.History.push("/better-mix");
     const strip = row.querySelector(".hmx-strip");
     items.forEach((m) => strip.appendChild(m.pending ? pendingCard(m.name) : card(m)));
+
+    // Arrows like Spotify's shelves. A scrollbar assumes a trackpad; with a
+    // mouse there's nothing to swipe, so the far end of the row was
+    // unreachable. Each click moves just under one screenful, so a card is
+    // never left half-shown at the edge.
+    const [left, right] = [".hmx-arrow-l", ".hmx-arrow-r"].map((c) => row.querySelector(c));
+    const update = () => {
+      const max = strip.scrollWidth - strip.clientWidth;
+      left.hidden = strip.scrollLeft <= 1;
+      right.hidden = strip.scrollLeft >= max - 1;
+    };
+    const page = (dir) => strip.scrollBy({ left: dir * strip.clientWidth * 0.85, behavior: "smooth" });
+    left.onclick = () => page(-1);
+    right.onclick = () => page(1);
+    strip.addEventListener("scroll", update, { passive: true });
+    // Cards arrive as mixes finish building, and the window can be resized, so
+    // recheck rather than deciding once.
+    new ResizeObserver(update).observe(strip);
+    update();
     return row;
   }
 
@@ -1231,11 +1254,22 @@ window.__betterMixExtensionLoaded = true;
     .hmx-progress { font-size: 13px; color: var(--spice-subtext, #b3b3b3); }
     .hmx-rebuild { margin-left: 18px; background: transparent; border: 0; color: var(--spice-subtext, #b3b3b3); font-size: 14px; font-weight: 700; cursor: pointer; }
     .hmx-rebuild:hover { color: var(--spice-text, #fff); text-decoration: underline; }
+    .hmx-scroller { position: relative; min-width: 0; }
     .hmx-strip { display: flex; gap: 18px; min-width: 0; width: 100%; overflow-x: auto; overflow-y: hidden;
-                 padding-bottom: 8px; scroll-snap-type: x proximity; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.18) transparent; }
-    .hmx-strip::-webkit-scrollbar { height: 6px; }
-    .hmx-strip::-webkit-scrollbar-thumb { background: rgba(255,255,255,.18); border-radius: 3px; }
-    .hmx-strip::-webkit-scrollbar-track { background: transparent; }
+                 padding-bottom: 8px; scroll-snap-type: x proximity; scrollbar-width: none; }
+    .hmx-strip::-webkit-scrollbar { display: none; }
+    /* Centred on the card artwork: 12px card padding + half of the 156px cover. */
+    .hmx-arrow { position: absolute; top: 90px; transform: translateY(-50%); z-index: 2;
+                 width: 32px; height: 32px; border: 0; border-radius: 50%; cursor: pointer;
+                 display: flex; align-items: center; justify-content: center;
+                 background: rgba(0, 0, 0, .7); color: var(--spice-text, #fff);
+                 opacity: 0; transition: opacity 150ms ease, background-color 150ms ease; }
+    .hmx-arrow svg { width: 16px; height: 16px; display: block; }
+    .hmx-arrow-l { left: -8px; }
+    .hmx-arrow-r { right: -8px; }
+    .hmx-arrow:hover { background: rgba(0, 0, 0, .9); transform: translateY(-50%) scale(1.06); }
+    .hmx-arrow[hidden] { display: none; }
+    .hmx-row:hover .hmx-arrow { opacity: 1; }
     .hmx-card { scroll-snap-align: start; }
     .hmx-card { width: 180px; flex: 0 0 auto; border-radius: 8px; padding: 12px; background: var(--spice-card, #181818); transition: background-color 150ms ease; }
     .hmx-card:hover { background: var(--spice-highlight, #282828); }
