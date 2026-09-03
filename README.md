@@ -1,7 +1,8 @@
 # Better Mix
 
-**Have you ever felt that Spotify's mixes are lacking?** Better Mix takes every
-mix Spotify makes for you, asks Spotify what fits it, then throws out
+**Have you ever felt that Spotify's mixes are lacking?** 
+
+Better Mix takes every mix Spotify makes for you, asks Spotify what fits it, then throws out
 everything you already listen to — your library, your recent plays, the mix's
 own artists. What's left is popular music by artists you *don't* play, ranked
 by popularity, with a few songs you know spread through it.
