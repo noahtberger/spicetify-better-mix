@@ -16,8 +16,12 @@ Copy one folder, run two commands.
 **1.** Download this repo — the green **Code** button above, then **Download
 ZIP** — and unzip it.
 
-**2.** Copy the folder named `better-mix` into Spicetify's `CustomApps` folder.
-Keep the name exactly as it is; Spotify uses it as the page's address.
+**2.** Open the unzipped folder — it's called `spicetify-better-mix-main`.
+**Inside it is a folder called `better-mix`. That's the one you want**, not the
+outer one.
+
+Copy `better-mix` into Spicetify's `CustomApps` folder, keeping the name
+exactly as it is — Spotify uses it as the page's address.
 
 | | |
 |---|---|
