@@ -15,10 +15,36 @@ Nothing touches your library unless you press save.
 
 ## Install
 
-Spotify has to be told about a new page, and only `spicetify apply` can do
-that — which is why this can't be a one-click Marketplace install. It's a
-one-time copy. **The folder must be named exactly `better-mix`**: that's also
-the page's address inside Spotify.
+Copy one folder, run two commands.
+
+**1.** Download this repo — the green **Code** button above, then **Download
+ZIP** — and unzip it.
+
+**2.** Copy the folder named `better-mix` into Spicetify's `CustomApps` folder.
+Keep the name exactly as it is; Spotify uses it as the page's address.
+
+| | |
+|---|---|
+| macOS / Linux | `~/.config/spicetify/CustomApps/` |
+| Windows | `%APPDATA%\spicetify\CustomApps\` |
+
+Not sure where that is? Run `spicetify path userdata` and look for
+`CustomApps` inside.
+
+**3.** In a terminal, run:
+
+```bash
+spicetify config custom_apps better-mix
+spicetify apply
+```
+
+Spotify will restart. **Open your Home page once** so Better Mix can see which
+mixes Spotify makes for you — it builds them in the background over a few
+minutes, and the rows show a counter while it works. After that it runs on its
+own.
+
+<details>
+<summary>Prefer the command line?</summary>
 
 ```bash
 git clone https://github.com/noahtberger/spicetify-better-mix.git
@@ -27,18 +53,15 @@ spicetify config custom_apps better-mix
 spicetify apply
 ```
 
-No git? Download the repo as a zip from GitHub, then copy the `better-mix`
-folder inside it to `~/.config/spicetify/CustomApps/` on macOS and Linux, or
-`%APPDATA%\spicetify\CustomApps\` on Windows, and run the last two commands.
+</details>
 
-That one folder carries everything — the pages and the extension that builds
-the mixes and replaces the Home rows.
+**Updating later:** download again, copy the folder over the old one, and run
+`spicetify apply`.
 
-Then **open Home once** so it can see which mixes Spotify makes for you. The
-first run builds them in the background over a few minutes, with a counter on
-the rows showing progress. After that it looks after itself.
-
-To update: pull, copy the folder again, `spicetify apply`.
+**Why isn't this one click from Marketplace?** Marketplace can install
+extensions on the spot, but a page like this has to be registered with Spotify
+by `spicetify apply` — and Marketplace runs inside Spotify, so it can't do
+that.
 
 ## Using it
 
