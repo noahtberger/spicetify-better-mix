@@ -78,3 +78,13 @@ so the same few songs don't fill everything. A handful of songs you know are
 spliced through so it doesn't open like a stranger's playlist.
 
 Every track records which rule let it in, visible on hover in the tracklist.
+
+---
+
+Thanks for trying Better Mix. If it's turning up music you wouldn't have found
+otherwise, a ⭐ on the repo helps other people come across it — Spicetify
+Marketplace sorts by stars, so it's the difference between showing up on the
+first page and the fourth.
+
+Found a bug or thought of something it should do?
+[Open an issue](https://github.com/noahtberger/spicetify-better-mix/issues).
