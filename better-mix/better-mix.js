@@ -751,6 +751,19 @@ window.__betterMixExtensionLoaded = true;
       out = out.concat(added);
       if (added.length) logLine(`filled the last ${added.length} from Spotify's own ${sourceName || "mix"}`);
     }
+    // Mix up the running order. Built in stages, the list came out grouped:
+    // the strict picks, then the same-artist top-ups with each artist's
+    // songs side by side. Shuffle, then push apart any two neighbours by the
+    // same artist so it plays like a mix rather than a discography.
+    out = shuffle(out);
+    const who = (t) => t?.artists?.[0]?.uri || t?.artists?.[0]?.name || "?";
+    for (let pass = 0; pass < 3; pass++) {
+      for (let i = 1; i < out.length; i++) {
+        if (who(out[i]) !== who(out[i - 1])) continue;
+        const j = out.findIndex((t, k) => k > i && who(t) !== who(out[i - 1]) && (k + 1 >= out.length || who(out[k + 1]) !== who(out[i])));
+        if (j > 0) [out[i], out[j]] = [out[j], out[i]];
+      }
+    }
     familiar.forEach((t, i) =>
       out.splice(Math.floor(((i + 1) * out.length) / (familiar.length + 1)), 0, t)
     );
@@ -1022,7 +1035,7 @@ window.__betterMixExtensionLoaded = true;
   let enabled = (() => { try { return localStorage.getItem(ENABLED_KEY) !== "false"; } catch { return true; } })();
   // Bump when the selection rules change. Mixes built under older rules get
   // rebuilt automatically at the next startup instead of waiting a day.
-  const RULES_VERSION = 11;  // 11: mix artists' top songs count too; one popularity target for every stage
+  const RULES_VERSION = 12;  // 12: running order shuffled, same artist never back to back
   const readCurrent = () => { try { return JSON.parse(localStorage.getItem(CUR_KEY)) || []; } catch { return []; } };
 
   // Keep the store bounded. It was 1.5 MB at 78 mixes and grew with every
