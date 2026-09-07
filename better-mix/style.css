@@ -85,10 +85,8 @@
 .bmx-dur { font-size: 14px; color: var(--spice-subtext, #b3b3b3); text-align: right; font-variant-numeric: tabular-nums; }
 
 /* --- index (all mixes) --- */
-.bmx-index-head { display: flex; align-items: center; justify-content: space-between; padding: 32px 0 20px; }
-.bmx-index-head h1 { margin: 0; font-size: 32px; font-weight: 700; }
-.bmx-index-head { display: flex; align-items: center; gap: 16px; }
-.bmx-index-head h1 { margin-right: auto; }
+.bmx-index-head { display: flex; align-items: center; gap: 16px; padding: 32px 0 20px; }
+.bmx-index-head h1 { margin: 0 auto 0 0; font-size: 32px; font-weight: 700; }
 .bmx-index-search { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px; border-radius: 20px;
   background: var(--spice-highlight, #282828); color: var(--spice-subtext, #b3b3b3); }
 .bmx-index-search:focus-within { outline: 1px solid var(--spice-subtext, #b3b3b3); color: var(--spice-text, #fff); }
