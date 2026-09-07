@@ -511,7 +511,7 @@ window.__betterMixExtensionLoaded = true;
       logLine("  fit: no listener numbers from Spotify's artist pages — fit filter off");
     }
     return {
-      on,
+      on, relatedTo,
       fits: (t) => { const u = t?.artists?.[0]?.uri; return !on || !u || mixArtists.has(u) || verdict.get(u) === true; },
     };
   }
@@ -659,7 +659,7 @@ window.__betterMixExtensionLoaded = true;
     const candidates = recommended.concat(catalogue.filter((t) => !seenUri.has(t.uri) && seenUri.add(t.uri)));
     logLine(`pool: ${recommended.length} from the recommender + ${candidates.length - recommended.length} from catalogues`);
     await fetchMeta(candidates.map((t) => t.uri));
-    const { fits, on: gateOn } = await artistGate(candidates, cat.seedInfos, sourcePrimary);
+    const { fits, on: gateOn, relatedTo } = await artistGate(candidates, cat.seedInfos, sourcePrimary);
 
     // Artist-aware script guard. Plenty of Japanese artists release with
     // romanised titles ("Kabutomushi — aiko", "Teenager Forever — King Gnu"),
@@ -689,6 +689,7 @@ window.__betterMixExtensionLoaded = true;
     // unrelated to it -- is out, however good the song. That's how rap got
     // into J-Pop and Peso Pluma into an emo-rap mix.
     const SIMILAR_SHARE = 0.3;
+    const CORE_BONUS = 4;
     const perArtist = new Map();
     const eraCount = new Map();
     const fresh = [];
@@ -706,8 +707,9 @@ window.__betterMixExtensionLoaded = true;
       const famous = plays ? Math.max(0, Math.log10(plays) - FAMOUS_FROM) * FAMOUS_WEIGHT : UNKNOWN_PENALTY;
       return -outside * 2.2
         - famous
-        - ERA_PENALTY * (eraCount.get(eraOf(t)) || 0)
+        - ERA_PENALTY * Math.min(4, eraCount.get(eraOf(t)) || 0)   // spread eras, but never let the quota outrank the song
         - SPREAD_PENALTY * (used.get(t.uri) || 0)
+        + CORE_BONUS * Math.min(3, tally.get(lead(t)) || 0)          // an artist with 8 songs in the original before one with 1
         + Math.random() * JITTER;
     };
     // Best remaining each pass rather than one sort: a track's score depends
@@ -720,7 +722,7 @@ window.__betterMixExtensionLoaded = true;
         for (let k = 0; k < remaining.length; k++) { const sc = score(remaining[k]); if (sc > bs) { bs = sc; bi = k; } }
         const t = remaining.splice(bi, 1)[0];
         const key = lead(t);
-        if ((perArtist.get(key) || 0) >= cap) { cutCap++; continue; }
+        if ((perArtist.get(key) || 0) >= (typeof cap === "function" ? cap(t) : cap)) { cutCap++; continue; }
         perArtist.set(key, (perArtist.get(key) || 0) + 1);
         eraCount.set(eraOf(t), (eraCount.get(eraOf(t)) || 0) + 1);
         t.why = why; t.year = yearOf(t);
@@ -744,10 +746,20 @@ window.__betterMixExtensionLoaded = true;
       if (decade) { const y = yearOf(t); if (!y || y < decade[0] || y > decade[1]) { cutDecade++; return false; } }
       return true;
     });
-    const own = usable.filter((t) => sourcePrimary.has(lead(t)));
-    const others = usable.filter((t) => !sourcePrimary.has(lead(t)));
+    // Everyone credited on the track has to belong: a mix artist, or someone
+    // Spotify relates to one. JAY-Z is a Daily Mix 1 artist; the JAY-Z and
+    // Linkin Park song is not a Daily Mix 1 song.
+    let cutGuest = 0;
+    const guestsOk = (t) => (t.artists || []).every((x) => !x?.uri || sourcePrimary.has(x.uri) || relatedTo.has(x.uri));
+    const usableG = usable.filter((t) => guestsOk(t) || (cutGuest++, false));
+    const own = usableG.filter((t) => sourcePrimary.has(lead(t)));
+    const others = usableG.filter((t) => !sourcePrimary.has(lead(t)));
 
-    const a = pick(own, { cap: maxPerArtist + 1, limit: total, why: "mix artist" });
+    // An artist's slots follow their weight in the original: one song there
+    // is an edge of the mix and earns one slot, not three. Otherwise a lone
+    // Polo G track in an emo-rap Daily Mix turned into three Polo G tracks.
+    const ownCap = (t) => Math.min(maxPerArtist + 1, tally.get(lead(t)) || 1);
+    const a = pick(own, { cap: ownCap, limit: total, why: "mix artist" });
     let b = 0;
     if (gateOn) {
       const similarPool = others.filter((t) => {
@@ -763,7 +775,8 @@ window.__betterMixExtensionLoaded = true;
       (gateOn ? "" : " (none: no artist data to judge similarity, so the mix keeps to its own artists)"));
     logLine(`  cut: -${cutTrack} already played, -${cutLow} obscure, -${cutCap} over the artist cap` +
       (cutArtist ? `, -${cutArtist} your artists from other mixes` : "") + (cutFit ? `, -${cutFit} unrelated to this mix` : "") +
-      (cutOHW ? `, -${cutOHW} one-hit wonders` : "") + (decade ? `, -${cutDecade} outside ${decade[0]}-${decade[1]}` : "") +
+      (cutOHW ? `, -${cutOHW} one-hit wonders` : "") + (cutGuest ? `, -${cutGuest} with a guest from outside the mix` : "") +
+      (decade ? `, -${cutDecade} outside ${decade[0]}-${decade[1]}` : "") +
       (theme ? `, -${cutTheme} off-script (${rescued} romanised tracks kept)` : ""));
     const eras = {};
     fresh.forEach((t) => { const e = eraOf(t); eras[e] = (eras[e] || 0) + 1; });
@@ -1114,7 +1127,7 @@ window.__betterMixExtensionLoaded = true;
   let enabled = (() => { try { return localStorage.getItem(ENABLED_KEY) !== "false"; } catch { return true; } })();
   // Bump when the selection rules change. Mixes built under older rules get
   // rebuilt automatically at the next startup instead of waiting a day.
-  const RULES_VERSION = 19;  // 19: mood and activity mixes keep 40% of Spotify's own picks
+  const RULES_VERSION = 20;  // 20: slots follow weight in the original; guests must belong; era quota capped
   const readCurrent = () => { try { return (JSON.parse(localStorage.getItem(CUR_KEY)) || []).filter((m) => !LEAVE_ALONE.test(String(m?.name || ""))); } catch { return []; } };
 
   // Keep the store bounded. It was 1.5 MB at 78 mixes and grew with every
