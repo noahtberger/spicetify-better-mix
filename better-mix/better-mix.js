@@ -194,7 +194,7 @@ window.__betterMixExtensionLoaded = true;
   // fits. A soft penalty, not a ban: genuinely similar mixes (Hype Workout,
   // Hype Running Rap) should still share some songs.
   const SPREAD_PENALTY = 12;
-  async function buildMix({ sourceUri, total, familiarCount, maxPerArtist, used = new Map() }) {
+  async function buildMix({ sourceUri, sourceName, total, familiarCount, maxPerArtist, used = new Map() }) {
     const source = (await playlistTracks(sourceUri).catch(() => [])).filter((t) => t?.uri).map(normalize);
     logLine("gathering what you already listen to…");
     const known = await knownStuff(sourceUri, source);
@@ -299,10 +299,22 @@ window.__betterMixExtensionLoaded = true;
         have.add(t.uri); fresh.push(t); knownUp++;
       }
 
-      if (capUp || knownUp)
-        logLine(`strict pass gave ${strict} — topped up: +${capUp} more from the new artists, +${knownUp} unheard songs by this mix's own artists`);
+      // stage 3: anything left in the pool that still fits the theme, artist
+      // cap ignored. By here we're choosing between a short mix and a couple
+      // of extra songs by one artist -- the extra songs win.
+      let anyUp = 0;
+      for (const t of pool) {
+        if (fresh.length >= total) break;
+        if (have.has(t.uri) || offTheme(t)) continue;
+        t.why = "top-up:any";
+        have.add(t.uri); fresh.push(t); anyUp++;
+      }
+
+      if (capUp || knownUp || anyUp)
+        logLine(`strict pass gave ${strict} — topped up: +${capUp} more from the new artists, ` +
+          `+${knownUp} unheard songs by this mix's own artists` + (anyUp ? `, +${anyUp} remaining candidates` : ""));
       if (fresh.length < total)
-        logLine(`still short at ${fresh.length}: the recommender only offered ${candidates.length} candidates for this one`);
+        logLine(`recommender only offered ${candidates.length} candidates — filling the rest from the mix itself`);
     }
 
     // A few tracks you know, spread through rather than front-loaded -- but
@@ -317,7 +329,22 @@ window.__betterMixExtensionLoaded = true;
     logLine(familiar.length
       ? `familiar (${familiarPool.length} eligible): ${familiar.map((t) => `${t.name} — ${(t.artists || []).map((a) => a.name).join(", ")}`).join("  ·  ")}`
       : "familiar: none of this mix's tracks are on-theme by the recommender's artists — none added");
-    const out = fresh.slice(0, Math.max(0, total - familiar.length));
+    let out = fresh.slice(0, Math.max(0, total - familiar.length));
+
+    // Last resort: the recommender is capped at ~100 candidates per playlist,
+    // and for a mix whose artists you almost all know, very few survive. Rather
+    // than hand back 38 songs, fill from Spotify's own version of the mix --
+    // songs that belong there, just ones you've heard. Tagged so it's visible
+    // on the page which part of a mix this is.
+    const want = total - familiar.length;
+    if (out.length < want) {
+      const have = new Set([...out, ...familiar].map((t) => t.uri));
+      const filler = shuffle(source.filter((t) => t?.uri && !have.has(t.uri) && !offTheme(t)));
+      const added = filler.slice(0, want - out.length);
+      added.forEach((t) => { t.why = "from the original mix"; });
+      out = out.concat(added);
+      if (added.length) logLine(`filled the last ${added.length} from Spotify's own ${sourceName || "mix"}`);
+    }
     familiar.forEach((t, i) =>
       out.splice(Math.floor(((i + 1) * out.length) / (familiar.length + 1)), 0, t)
     );
@@ -490,7 +517,7 @@ window.__betterMixExtensionLoaded = true;
         progress.current.push(m.name); emitProgress();
         logLine(`\n=== ${m.name} ===`);
         try {
-          const tracks = await buildMix({ sourceUri: m.uri, total, familiarCount, maxPerArtist, used });
+          const tracks = await buildMix({ sourceUri: m.uri, sourceName: m.name, total, familiarCount, maxPerArtist, used });
           tracks.forEach((t) => used.set(t.uri, (used.get(t.uri) || 0) + 1));
           const name = "Better " + m.name.replace(/^better\s+/i, "");
           const prev = store.find((x) => x.sourceUri === m.uri);
@@ -567,7 +594,7 @@ window.__betterMixExtensionLoaded = true;
   let enabled = (() => { try { return localStorage.getItem(ENABLED_KEY) !== "false"; } catch { return true; } })();
   // Bump when the selection rules change. Mixes built under older rules get
   // rebuilt automatically at the next startup instead of waiting a day.
-  const RULES_VERSION = 4;
+  const RULES_VERSION = 5;
   const readCurrent = () => { try { return JSON.parse(localStorage.getItem(CUR_KEY)) || []; } catch { return []; } };
 
   // Keep the store bounded. It was 1.5 MB at 78 mixes and grew with every
@@ -682,6 +709,7 @@ window.__betterMixExtensionLoaded = true;
       try {
         const tracks = await buildMix({
           sourceUri: val("#bmx-src"),
+          sourceName: lists.find((p) => p.uri === val("#bmx-src"))?.name,
           total: +val("#bmx-total"),
           familiarCount: +val("#bmx-fam"),
           maxPerArtist: +val("#bmx-cap"),
