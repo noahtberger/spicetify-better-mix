@@ -714,8 +714,12 @@ window.__betterMixExtensionLoaded = true;
     };
     // Best remaining each pass rather than one sort: a track's score depends
     // on which eras are already in, and the jitter is what makes rebuilds vary.
+    // The same song under two Spotify entries (album and single, or a
+    // sped-up version) is still the same song: match on title and artist.
+    const songKey = (t) => `${String(t?.name || "").toLowerCase().replace(/\s*[\(\[-].*$/, "").trim()}|${String(t?.artists?.[0]?.name || "").toLowerCase()}`;
+    const inMix = new Set();
     const pick = (pool, { cap, limit, why }) => {
-      const remaining = pool.slice();
+      const remaining = pool.filter((t) => !inMix.has(t.uri) && !inMix.has(songKey(t)));
       let n = 0;
       while (remaining.length && fresh.length < total && n < limit) {
         let bi = 0, bs = -Infinity;
@@ -726,6 +730,7 @@ window.__betterMixExtensionLoaded = true;
         perArtist.set(key, (perArtist.get(key) || 0) + 1);
         eraCount.set(eraOf(t), (eraCount.get(eraOf(t)) || 0) + 1);
         t.why = why; t.year = yearOf(t);
+        inMix.add(t.uri); inMix.add(songKey(t));
         fresh.push(t); n++;
       }
       return n;
@@ -806,7 +811,8 @@ window.__betterMixExtensionLoaded = true;
     const moodMix = MOOD_RE.test(sourceName || "");
     const familiarN = moodMix ? Math.max(familiarCount, Math.round(total * 0.4)) : familiarCount;
     if (moodMix) logLine(`mood/activity mix: keeping ${familiarN} of Spotify's own picks — the client can't hear mood`);
-    const familiar = shuffle(familiarPool).slice(0, familiarN);
+    const familiar = shuffle(familiarPool).filter((t) => !inMix.has(t.uri) && !inMix.has(songKey(t))).slice(0, familiarN);
+    familiar.forEach((t) => { inMix.add(t.uri); inMix.add(songKey(t)); });
     familiar.forEach((t) => { t.why = "familiar"; });
     logLine(familiar.length
       ? `familiar (${familiarPool.length} eligible): ${familiar.map((t) => `${t.name} — ${(t.artists || []).map((a) => a.name).join(", ")}`).join("  ·  ")}`
@@ -830,10 +836,11 @@ window.__betterMixExtensionLoaded = true;
       const fromOriginal = (cap) => {
         for (const t of filler) {
           if (out.length + added.length >= want) break;
-          if (added.includes(t)) continue;
+          if (added.includes(t) || inMix.has(t.uri) || inMix.has(songKey(t))) continue;
           const key = t.artists?.[0]?.uri ?? "?";
           if ((perArtist.get(key) || 0) >= cap) continue;
           perArtist.set(key, (perArtist.get(key) || 0) + 1);
+          inMix.add(t.uri); inMix.add(songKey(t));
           t.why = "from the original mix"; added.push(t);
         }
       };
@@ -1147,7 +1154,7 @@ window.__betterMixExtensionLoaded = true;
   let enabled = (() => { try { return localStorage.getItem(ENABLED_KEY) !== "false"; } catch { return true; } })();
   // Bump when the selection rules change. Mixes built under older rules get
   // rebuilt automatically at the next startup instead of waiting a day.
-  const RULES_VERSION = 22;  // 22: fill order: own artists +1, original (loose cap), similar beyond share, original (no cap)
+  const RULES_VERSION = 23;  // 23: no song twice, by entry or by title+artist
   const readCurrent = () => { try { return (JSON.parse(localStorage.getItem(CUR_KEY)) || []).filter((m) => !LEAVE_ALONE.test(String(m?.name || ""))); } catch { return []; } };
 
   // Keep the store bounded. It was 1.5 MB at 78 mixes and grew with every
