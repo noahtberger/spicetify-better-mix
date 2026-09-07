@@ -317,16 +317,55 @@ window.__betterMixExtensionLoaded = true;
     return timed(G.Request(G.Definitions[name], vars), ms, label);
   };
 
+  const diag = (patch) => {
+    try { localStorage.setItem("better-mix:diag", JSON.stringify({ ...(JSON.parse(localStorage.getItem("better-mix:diag")) || {}), ...patch, at: new Date().toISOString() })); } catch {}
+  };
+
+  // Spotify's older artist endpoint, still answered by some clients: one
+  // call gives listeners, related artists, releases and top tracks. Tried
+  // when the GraphQL artist page fails or comes back without numbers.
+  async function artistLegacy(uri) {
+    const id = uri.split(":").pop();
+    const r = await timed(Spicetify.CosmosAsync.get(`wg://artist/v1/${id}/desktop?format=json`), 10000, "an artist page (legacy)");
+    if (!r || typeof r !== "object") throw new Error("legacy artist endpoint returned nothing");
+    const rel = (x) => x?.uri ? { uri: x.uri, name: x.name, date: { year: x.year ?? x.release_date?.year ?? null } } : null;
+    const releases = [...(r.releases?.albums?.releases || []), ...(r.releases?.singles?.releases || [])].map(rel).filter(Boolean);
+    return {
+      data: { artistUnion: {
+        profile: { name: r.info?.name },
+        stats: { monthlyListeners: r.monthly_listeners },
+        discography: {
+          latest: r.latest_release ? rel(r.latest_release) : null,
+          popularReleasesAlbums: { items: releases.slice(0, 5) },
+          albums: { items: releases.map((x) => ({ releases: { items: [x] } })) },
+          topTracks: { items: (r.top_tracks?.tracks || []).map((t) => ({ track: {
+            uri: t.uri, name: t.name, playcount: t.playcount, duration: { totalMilliseconds: t.duration },
+            artists: { items: (t.artists || [{ uri, profile: { name: r.info?.name } }]).map((a) => ({ uri: a.uri, profile: { name: a.name } })) },
+            albumOfTrack: { uri: t.release?.uri, name: t.release?.name, coverArt: { sources: [{ url: t.release?.cover?.uri }] } },
+          } })) },
+        },
+        relatedContent: { relatedArtists: { items: (r.related_artists?.artists || []).map((a) => ({ uri: a.uri })) } },
+      } },
+    };
+  }
+
   // What an artist has put out lately, plus who Spotify says is like them.
   async function artistInfo(uri) {
     const c = artistCache.get(uri);
     if (c && Date.now() - c.at < ARTIST_TTL) return c;
-    let r;
+    let r, how = "graphql";
     try {
       r = await gql("queryArtistOverview", { uri, locale: "", includePrerelease: false, enableAssociatedVideos: false }, 10000, "an artist page");
-    } catch (e) {
-      r = await gql("queryArtistDiscographyAlbums", { uri, offset: 0, limit: 10 }, 10000, "an artist discography");
+      if (!r?.data?.artistUnion?.stats?.monthlyListeners) throw new Error("artist page without listener numbers: keys " + Object.keys(r?.data?.artistUnion || r?.data || r || {}).join(","));
+    } catch (e1) {
+      try { r = await artistLegacy(uri); how = "legacy"; }
+      catch (e2) {
+        diag({ artistSource: "failed", graphql: String(e1?.message || e1), legacy: String(e2?.message || e2),
+               defs: Object.keys(Spicetify.GraphQL?.Definitions || {}).filter((k) => /artist/i.test(k)).slice(0, 20) });
+        throw e1;
+      }
     }
+    diag({ artistSource: how });
     const a = r?.data?.artistUnion || {};
     const d = a.discography || {};
     const rel = (x) => x && x.uri ? { uri: x.uri, year: x.date?.year ?? null, name: x.name } : null;
@@ -1326,8 +1365,9 @@ window.__betterMixExtensionLoaded = true;
   }
 
   // Shared surface for home-mixes.js (and for poking at from the console).
-  window.BetterMix = { ready: true, open: () => openMenu(), rebuildAll, rebuildOne, saveVirtual, unsaveVirtual, play,
-    getShuffle, setShuffle, virtual: readVirtual, get progress() { return { ...progress }; } };
+  window.BetterMix = { ready: true, version: VERSION, rules: RULES_VERSION, open: () => openMenu(), rebuildAll, rebuildOne, saveVirtual, unsaveVirtual, play,
+    getShuffle, setShuffle, virtual: readVirtual, get progress() { return { ...progress }; },
+    get diag() { try { return JSON.parse(localStorage.getItem("better-mix:diag")); } catch { return null; } } };
 
   console.log(`[better-mix] loaded — ${readVirtual().length} mixes in store`);
   } catch (e) {
