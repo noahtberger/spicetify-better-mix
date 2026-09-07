@@ -769,9 +769,16 @@ window.__betterMixExtensionLoaded = true;
         return true;
       });
       b = pick(similarPool, { cap: maxPerArtist, limit: Math.round(total * SIMILAR_SHARE), why: "similar artist" });
+      // Short? Similar artists may take more than their share before anything
+      // looser happens: they at least fit.
+      if (fresh.length < total) b += pick(similarPool, { cap: maxPerArtist, limit: total, why: "similar artist" });
     }
+    // Still short: one more song each from the mix's own artists. A fourth
+    // Drake beats a 44-song mix; a thirteenth never comes back.
+    let a2 = 0;
+    if (fresh.length < total) a2 = pick(own, { cap: (t) => ownCap(t) + 1, limit: total, why: "mix artist" });
 
-    logLine(`picked ${a} by this mix's artists (${own.length} usable) + ${b} by similar artists` +
+    logLine(`picked ${a + a2} by this mix's artists (${own.length} usable${a2 ? `, ${a2} on the loosened cap` : ""}) + ${b} by similar artists` +
       (gateOn ? "" : " (none: no artist data to judge similarity, so the mix keeps to its own artists)"));
     logLine(`  cut: -${cutTrack} already played, -${cutLow} obscure, -${cutCap} over the artist cap` +
       (cutArtist ? `, -${cutArtist} your artists from other mixes` : "") + (cutFit ? `, -${cutFit} unrelated to this mix` : "") +
@@ -818,15 +825,22 @@ window.__betterMixExtensionLoaded = true;
       // Same cap as every other stage; a mix that comes up short is logged,
       // and it beats one artist taking a quarter of the tracklist.
       const added = [];
-      for (const t of shuffle(source.filter((t) => t?.uri && !have.has(t.uri) && !offTheme(t)))) {
-        if (out.length + added.length >= want) break;
-        const key = t.artists?.[0]?.uri ?? "?";
-        if ((perArtist.get(key) || 0) >= maxPerArtist + 1) continue;
-        perArtist.set(key, (perArtist.get(key) || 0) + 1);
-        t.why = "from the original mix"; added.push(t);
+      const filler = shuffle(source.filter((t) => t?.uri && !have.has(t.uri) && !offTheme(t)));
+      // Two rounds: under a slightly looser artist cap, then -- if the mix is
+      // still short -- whatever the original has left. A full mix of songs
+      // Spotify chose for it beats a short one.
+      for (const cap of [maxPerArtist + 2, Infinity]) {
+        for (const t of filler) {
+          if (out.length + added.length >= want) break;
+          if (added.includes(t)) continue;
+          const key = t.artists?.[0]?.uri ?? "?";
+          if ((perArtist.get(key) || 0) >= cap) continue;
+          perArtist.set(key, (perArtist.get(key) || 0) + 1);
+          t.why = "from the original mix"; added.push(t);
+        }
       }
       if (out.length + added.length < want)
-        logLine(`short by ${want - out.length - added.length}: nothing left under the ${maxPerArtist + 1}-per-artist cap`);
+        logLine(`short by ${want - out.length - added.length}: the original has nothing left either`);
       out = out.concat(added);
       if (added.length) logLine(`filled the last ${added.length} from Spotify's own ${sourceName || "mix"}`);
     }
@@ -1127,7 +1141,7 @@ window.__betterMixExtensionLoaded = true;
   let enabled = (() => { try { return localStorage.getItem(ENABLED_KEY) !== "false"; } catch { return true; } })();
   // Bump when the selection rules change. Mixes built under older rules get
   // rebuilt automatically at the next startup instead of waiting a day.
-  const RULES_VERSION = 20;  // 20: slots follow weight in the original; guests must belong; era quota capped
+  const RULES_VERSION = 21;  // 21: always fill to size -- looser caps in stages before running short
   const readCurrent = () => { try { return (JSON.parse(localStorage.getItem(CUR_KEY)) || []).filter((m) => !LEAVE_ALONE.test(String(m?.name || ""))); } catch { return []; } };
 
   // Keep the store bounded. It was 1.5 MB at 78 mixes and grew with every
