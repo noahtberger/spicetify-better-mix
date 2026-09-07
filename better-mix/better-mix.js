@@ -777,7 +777,15 @@ window.__betterMixExtensionLoaded = true;
     // the best signal there is for what actually fits.
     const onTheme = new Set(candidates.flatMap(artistKeys));
     const familiarPool = source.filter((t) => !offTheme(t) && artistKeys(t).some((k) => onTheme.has(k)));
-    const familiar = shuffle(familiarPool).slice(0, familiarCount);
+    // A mix named for a mood or an activity is defined by something the
+    // client can't hear -- a happy Drake song and a sad one look identical
+    // here. Spotify's own picks for it are the one part that's certainly on
+    // mood, so those mixes keep a much larger share of the original: 40%.
+    const MOOD_RE = /chill|moody|happy|good mood|feel good|hype|\bsad\b|melanchol|upbeat|focus|study|\blove\b|angry|angst|heartbreak|escapism|nostalgia|wake up|wedding|baking|basketball|homework|workout|running|cardio|driving|road trip|dance|cleaning|getting ready|summer/i;
+    const moodMix = MOOD_RE.test(sourceName || "");
+    const familiarN = moodMix ? Math.max(familiarCount, Math.round(total * 0.4)) : familiarCount;
+    if (moodMix) logLine(`mood/activity mix: keeping ${familiarN} of Spotify's own picks — the client can't hear mood`);
+    const familiar = shuffle(familiarPool).slice(0, familiarN);
     familiar.forEach((t) => { t.why = "familiar"; });
     logLine(familiar.length
       ? `familiar (${familiarPool.length} eligible): ${familiar.map((t) => `${t.name} — ${(t.artists || []).map((a) => a.name).join(", ")}`).join("  ·  ")}`
@@ -1106,7 +1114,7 @@ window.__betterMixExtensionLoaded = true;
   let enabled = (() => { try { return localStorage.getItem(ENABLED_KEY) !== "false"; } catch { return true; } })();
   // Bump when the selection rules change. Mixes built under older rules get
   // rebuilt automatically at the next startup instead of waiting a day.
-  const RULES_VERSION = 18;  // 18: decade mixes hold to their decade
+  const RULES_VERSION = 19;  // 19: mood and activity mixes keep 40% of Spotify's own picks
   const readCurrent = () => { try { return (JSON.parse(localStorage.getItem(CUR_KEY)) || []).filter((m) => !LEAVE_ALONE.test(String(m?.name || ""))); } catch { return []; } };
 
   // Keep the store bounded. It was 1.5 MB at 78 mixes and grew with every
