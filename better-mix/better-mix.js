@@ -191,12 +191,26 @@ window.__betterMixExtensionLoaded = true;
   // --- The algorithm ---------------------------------------------------------
   const shuffle = (a) => a.map((v) => [Math.random(), v]).sort((x, y) => x[0] - y[0]).map((p) => p[1]);
 
-  // Ranking purely by popularity gave every mix the same famous handful --
-  // one track landed in 25 of 80 mixes. `used` counts where each track has
-  // already gone, and each prior use costs it 12 popularity points, so an
-  // overused 92 falls behind a fresh 85 but can still win if nothing else
-  // fits. A soft penalty, not a ban: genuinely similar mixes (Hype Workout,
-  // Hype Running Rap) should still share some songs.
+  // --- Ranking ---------------------------------------------------------------
+  // Raw popularity was the wrong signal. It measures how much a track is
+  // streamed right now, which for a song outside your library mostly means
+  // "everyone has heard this" -- decade-old canonical hits and one-hit
+  // wonders scored highest, so the mixes filled with songs you knew but
+  // never chose. Three corrections:
+
+  // 1. Aim at a popularity BAND, not the top. Big enough to be listenable,
+  //    not so big it's unavoidable. Distance outside the band costs points.
+  const POP_TARGET = 66;
+  const POP_BAND = 12;      // free inside +/- this, penalised beyond
+
+  // 2. Prefer artists with several tracks in the candidate pool. A one-hit
+  //    wonder contributes exactly one mega-hit; an artist worth discovering
+  //    has a catalogue the recommender keeps reaching into.
+  const DEPTH_BONUS = 7;    // per extra track by the same artist, capped
+
+  // 3. A track already used in another mix costs points, so the same famous
+  //    handful doesn't fill everything. Soft, not a ban: genuinely similar
+  //    mixes should still share some songs.
   const SPREAD_PENALTY = 12;
   async function buildMix({ sourceUri, sourceName, total, familiarCount, maxPerArtist, used = new Map() }) {
     const source = (await playlistTracks(sourceUri).catch(() => [])).filter((t) => t?.uri).map(normalize);
@@ -253,7 +267,24 @@ window.__betterMixExtensionLoaded = true;
     const fresh = [];
     let cutTrack = 0, cutArtist = 0, cutCap = 0, cutTheme = 0;
 
-    const score = (t) => (t.popularity || 0) - SPREAD_PENALTY * (used.get(t.uri) || 0);
+    // How many tracks each artist has in this pool -- catalogue depth.
+    const depth = new Map();
+    for (const t of candidates) {
+      for (const k of artistKeys(t)) depth.set(k, (depth.get(k) || 0) + 1);
+    }
+    const depthOf = (t) => Math.max(0, ...artistKeys(t).map((k) => depth.get(k) || 0));
+
+    const score = (t) => {
+      const pop = t.popularity || 0;
+      const outside = Math.max(0, Math.abs(pop - POP_TARGET) - POP_BAND);
+      // The recommender's own relevance score for THIS playlist -- a better
+      // measure of fit than global popularity, when it gives us one.
+      const fit = typeof t.score === "number" ? t.score * 0.35 : pop * 0.35;
+      return fit
+        - outside * 1.1
+        + Math.min(4, depthOf(t) - 1) * DEPTH_BONUS
+        - SPREAD_PENALTY * (used.get(t.uri) || 0);
+    };
     for (const t of candidates.sort((a, b) => score(b) - score(a))) {
       if (known.tracks.has(t.uri)) { cutTrack++; continue; }
       if ((t.artists || []).some((a) => known.artists.has(a.uri || a.id))) { cutArtist++; continue; }
@@ -269,7 +300,10 @@ window.__betterMixExtensionLoaded = true;
     logLine(`filtered: -${cutTrack} already played, -${cutArtist} your artists, -${cutCap} artist cap` +
       (theme ? `, -${cutTheme} off-script (${rescued} romanised tracks kept via their artists)` : ""));
     const reused = fresh.filter((t) => used.get(t.uri)).length;
-    logLine(`${fresh.length} genuinely new tracks left` + (reused ? ` (${reused} also in another mix)` : ""));
+    const pops = fresh.map((t) => t.popularity || 0).sort((a, b) => a - b);
+    const med = pops.length ? pops[Math.floor(pops.length / 2)] : 0;
+    logLine(`${fresh.length} genuinely new tracks left` + (reused ? ` (${reused} also in another mix)` : "") +
+      (pops.length ? ` · median popularity ${med}, ${Math.round(100 * pops.filter((p) => p >= 85).length / pops.length)}% are big hits` : ""));
     if (!fresh.length) throw new Error("Nothing survived the filter — try a different playlist.");
 
     // If the strict pass can't fill the mix, loosen in stages rather than
@@ -598,7 +632,7 @@ window.__betterMixExtensionLoaded = true;
   let enabled = (() => { try { return localStorage.getItem(ENABLED_KEY) !== "false"; } catch { return true; } })();
   // Bump when the selection rules change. Mixes built under older rules get
   // rebuilt automatically at the next startup instead of waiting a day.
-  const RULES_VERSION = 5;
+  const RULES_VERSION = 6;
   const readCurrent = () => { try { return JSON.parse(localStorage.getItem(CUR_KEY)) || []; } catch { return []; } };
 
   // Keep the store bounded. It was 1.5 MB at 78 mixes and grew with every
