@@ -153,14 +153,36 @@ function Progress() {
     `Building today's mixes — ${p.done} of ${p.total}` + (p.current?.length ? `  ·  ${p.current.join(", ")}` : ""));
 }
 
+// Daily Mixes first, in order, then everything else by name. Matching a
+// search runs against the mix's name and the Spotify mix it came from.
+const dailyNum = (m) => { const x = /^better daily mix\s*(\d+)/i.exec(m.name || ""); return x ? Number(x[1]) : null; };
+const orderMixes = (list) => [...list].sort((a, b) => {
+  const da = dailyNum(a), db = dailyNum(b);
+  if (da !== null || db !== null) return da === null ? 1 : db === null ? -1 : da - db;
+  return String(a.name).localeCompare(String(b.name));
+});
+
 function Index({ store }) {
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const shown = orderMixes(store.filter((m) => !q || `${m.name} ${m.sourceName || ""}`.toLowerCase().includes(q)));
   return h("div", { className: "bmx-page bmx-index" },
     h(Progress),
     h("div", { className: "bmx-index-head" },
       h("h1", null, "Your mixes"),
+      h("div", { className: "bmx-index-search" },
+        sicon("search"),
+        h("input", {
+          className: "bmx-index-input", placeholder: "Search your mixes", value: query,
+          onChange: (e) => setQuery(e.target.value),
+          onKeyDown: (e) => { if (e.key === "Escape") setQuery(""); },
+        })),
       h("button", { className: "bmx-pill", onClick: () => window.BetterMix?.open?.() }, store.length ? "Rebuild" : "Build mixes")),
+    store.length && !shown.length
+      ? h("p", { className: "bmx-empty" }, `No mix matches “${query.trim()}”.`)
+      : null,
     store.length
-      ? h("div", { className: "bmx-grid" }, store.map((m) =>
+      ? h("div", { className: "bmx-grid" }, shown.map((m) =>
           h("div", { className: "bmx-card", key: m.id, onClick: () => openMix(m) },
             h(Cover, { mix: m, className: "bmx-card-cover" }),
             h("div", { className: "bmx-card-name" }, m.name),

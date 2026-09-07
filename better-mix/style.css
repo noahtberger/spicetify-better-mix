@@ -87,6 +87,14 @@
 /* --- index (all mixes) --- */
 .bmx-index-head { display: flex; align-items: center; justify-content: space-between; padding: 32px 0 20px; }
 .bmx-index-head h1 { margin: 0; font-size: 32px; font-weight: 700; }
+.bmx-index-head { display: flex; align-items: center; gap: 16px; }
+.bmx-index-head h1 { margin-right: auto; }
+.bmx-index-search { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px; border-radius: 20px;
+  background: var(--spice-highlight, #282828); color: var(--spice-subtext, #b3b3b3); }
+.bmx-index-search:focus-within { outline: 1px solid var(--spice-subtext, #b3b3b3); color: var(--spice-text, #fff); }
+.bmx-index-search svg { flex: none; }
+.bmx-index-input { width: 240px; border: 0; background: transparent; color: var(--spice-text, #fff); font: inherit; font-size: 14px; outline: none; }
+.bmx-index-input::placeholder { color: var(--spice-subtext, #b3b3b3); }
 .bmx-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 24px; }
 .bmx-card { padding: 16px; border-radius: 8px; background: var(--spice-card, #181818); cursor: pointer; transition: background-color 150ms ease; }
 .bmx-card:hover { background: var(--spice-highlight, #282828); }
