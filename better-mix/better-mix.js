@@ -39,6 +39,10 @@ window.__betterMixExtensionLoaded = true;
 // ============================================================================
 
 (function betterMix() {
+  // Printed on load so a bug report says which build it came from -- people
+  // install by copying a folder, so there's no other way to tell.
+  const VERSION = "1.0.0";
+
   // A stub from the very first tick, so anything calling BetterMix before
   // init finishes gets a clear answer. Replaced with the real object at the
   // bottom once everything's ready -- or left standing, with the error, if
@@ -72,7 +76,7 @@ window.__betterMixExtensionLoaded = true;
     return;
   }
   if (missing.length) console.warn(`[better-mix] starting without: ${missing.join(", ")} (those features off)`);
-  console.log(`[better-mix] initialised after ${waited}ms`);
+  console.log(`[better-mix] v${VERSION} initialised after ${waited}ms`);
   try {
 
   const P = () => Spicetify.Platform;

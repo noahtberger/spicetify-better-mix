@@ -13,12 +13,12 @@ by popularity, with a few songs you know spread through it.
 
 Copy one folder, run two commands.
 
-**1.** Download this repo — the green **Code** button above, then **Download
-ZIP** — and unzip it.
+**1.** Download the
+[latest release](https://github.com/noahtberger/spicetify-better-mix/releases/latest)
+— the **Source code (zip)** link — and unzip it.
 
-**2.** Open the unzipped folder — it's called `spicetify-better-mix-main`.
-**Inside it is a folder called `better-mix`. That's the one you want**, not the
-outer one.
+**2.** Open the unzipped folder. **Inside it is a folder called `better-mix`.
+That's the one you want**, not the outer one.
 
 Copy `better-mix` into Spicetify's `CustomApps` folder, keeping the name
 exactly as it is — Spotify uses it as the page's address.
@@ -55,8 +55,10 @@ spicetify apply
 
 </details>
 
-**Updating later:** download again, copy the folder over the old one, and run
-`spicetify apply`.
+**Updating later:** grab the
+[latest release](https://github.com/noahtberger/spicetify-better-mix/releases/latest),
+copy the folder over the old one, and run `spicetify apply`. What changed is in
+the [changelog](CHANGELOG.md).
 
 ## Using it
 
