@@ -440,7 +440,13 @@ window.__betterMixExtensionLoaded = true;
     const med = pops.length ? pops[Math.floor(pops.length / 2)] : 0;
     logLine(`${fresh.length} genuinely new tracks left` + (reused ? ` (${reused} also in another mix)` : "") +
       (pops.length ? ` · median popularity ${med}, ${Math.round(100 * pops.filter((p) => p >= 85).length / pops.length)}% are big hits` : ""));
-    if (!fresh.length) throw new Error("Nothing survived the filter — try a different playlist.");
+    // Don't give up here. The top-up stages below exist for exactly this, and
+    // the last of them fills from Spotify's own version of the mix, so a mix
+    // can always be built. This used to throw instead, which is why mixes
+    // whose artists you almost all know -- your rap mixes -- failed outright
+    // and then showed "building..." forever on the Home page.
+    if (!fresh.length)
+      logLine("nothing passed the strict filter — every artist here is one you already play");
 
     // If the strict pass can't fill the mix, loosen in stages rather than
     // hand back a short playlist. Each stage is a little less "new" than the
@@ -512,6 +518,8 @@ window.__betterMixExtensionLoaded = true;
       ? `familiar (${familiarPool.length} eligible): ${familiar.map((t) => `${t.name} — ${(t.artists || []).map((a) => a.name).join(", ")}`).join("  ·  ")}`
       : "familiar: none of this mix's tracks are on-theme by the recommender's artists — none added");
     let out = fresh.slice(0, Math.max(0, total - familiar.length));
+    if (!out.length && !familiar.length && !source.length)
+      throw new Error("no candidates and no source tracks — nothing to build from");
 
     // Last resort: the recommender is capped at ~100 candidates per playlist,
     // and for a mix whose artists you almost all know, very few survive. Rather
