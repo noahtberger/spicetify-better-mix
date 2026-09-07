@@ -1098,7 +1098,7 @@ window.__betterMixExtensionLoaded = true;
   // Bump when the selection rules change. Mixes built under older rules get
   // rebuilt automatically at the next startup instead of waiting a day.
   const RULES_VERSION = 17;  // 17: BPM mixes stay inside Spotify's own suggestions
-  const readCurrent = () => { try { return JSON.parse(localStorage.getItem(CUR_KEY)) || []; } catch { return []; } };
+  const readCurrent = () => { try { return (JSON.parse(localStorage.getItem(CUR_KEY)) || []).filter((m) => !LEAVE_ALONE.test(String(m?.name || ""))); } catch { return []; } };
 
   // Keep the store bounded. It was 1.5 MB at 78 mixes and grew with every
   // mix Spotify ever showed, rewritten on every build. A mix whose source
