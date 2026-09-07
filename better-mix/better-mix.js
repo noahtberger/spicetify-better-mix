@@ -649,8 +649,14 @@ window.__betterMixExtensionLoaded = true;
     const tally = new Map();
     for (const t of source) { const u = artistUri(t); if (u) tally.set(u, (tally.get(u) || 0) + 1); }
     const seeds = [...tally.entries()].sort((a, b) => b[1] - a[1]).map(([u]) => u).slice(0, 12);
-    logLine("reading those artists' newer releases and who's similar to them…");
-    const cat = await catalogueTracks(seeds, known);
+    // A tempo mix is defined by something the client can't see: BPM. An
+    // artist's newest releases are any tempo at all, so for these the pool
+    // stays inside Spotify's own suggestions for the playlist -- the one
+    // source that at least came from the system that knows the tempo.
+    const tempoMix = /\b\d{2,3}\s*bpm\b/i.test(sourceName || "");
+    let cat = { tracks: [], seedInfos: [] };
+    if (tempoMix) logLine("tempo mix: keeping to Spotify's own suggestions for it — the client can't see BPM");
+    else { logLine("reading those artists' newer releases and who's similar to them…"); cat = await catalogueTracks(seeds, known); }
     const catalogue = cat.tracks;
     const seenUri = new Set(recommended.map((t) => t.uri));
     const candidates = recommended.concat(catalogue.filter((t) => !seenUri.has(t.uri) && seenUri.add(t.uri)));
@@ -1094,7 +1100,7 @@ window.__betterMixExtensionLoaded = true;
   let enabled = (() => { try { return localStorage.getItem(ENABLED_KEY) !== "false"; } catch { return true; } })();
   // Bump when the selection rules change. Mixes built under older rules get
   // rebuilt automatically at the next startup instead of waiting a day.
-  const RULES_VERSION = 16;  // 16: similar = related to 2+ of the mix's artists and sharing their playlists
+  const RULES_VERSION = 17;  // 17: BPM mixes stay inside Spotify's own suggestions
   const readCurrent = () => { try { return JSON.parse(localStorage.getItem(CUR_KEY)) || []; } catch { return []; } };
 
   // Keep the store bounded. It was 1.5 MB at 78 mixes and grew with every
