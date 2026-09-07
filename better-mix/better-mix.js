@@ -100,7 +100,10 @@ window.__betterMixExtensionLoaded = true;
 
   // home-mixes.js records the Spotify mix shelves it hides. Reading them from
   // storage means this works anywhere, not just while Home is on screen.
-  const isMix = (x) => /^37i9dQZF1E/.test(String(x?.uri).split(":").pop()) && /\bmix(\s+\d+)?\s*$/i.test(String(x?.name || "").trim());
+  // Mixes defined by something the client can't measure -- tempo -- are left
+  // exactly as Spotify made them: not recorded, hidden, built or listed.
+  const LEAVE_ALONE = /\b\d{2,3}\s*bpm\b/i;
+  const isMix = (x) => /^37i9dQZF1E/.test(String(x?.uri).split(":").pop()) && /\bmix(\s+\d+)?\s*$/i.test(String(x?.name || "").trim()) && !LEAVE_ALONE.test(String(x?.name || ""));
   // Only mixes Spotify has actually shown in the last 30 days. Anything older
   // is one they've stopped offering -- no point rebuilding it weekly.
   const RECENT_MS = 30 * 24 * 60 * 60 * 1000;
@@ -649,14 +652,8 @@ window.__betterMixExtensionLoaded = true;
     const tally = new Map();
     for (const t of source) { const u = artistUri(t); if (u) tally.set(u, (tally.get(u) || 0) + 1); }
     const seeds = [...tally.entries()].sort((a, b) => b[1] - a[1]).map(([u]) => u).slice(0, 12);
-    // A tempo mix is defined by something the client can't see: BPM. An
-    // artist's newest releases are any tempo at all, so for these the pool
-    // stays inside Spotify's own suggestions for the playlist -- the one
-    // source that at least came from the system that knows the tempo.
-    const tempoMix = /\b\d{2,3}\s*bpm\b/i.test(sourceName || "");
-    let cat = { tracks: [], seedInfos: [] };
-    if (tempoMix) logLine("tempo mix: keeping to Spotify's own suggestions for it — the client can't see BPM");
-    else { logLine("reading those artists' newer releases and who's similar to them…"); cat = await catalogueTracks(seeds, known); }
+    logLine("reading those artists' newer releases and who's similar to them…");
+    const cat = await catalogueTracks(seeds, known);
     const catalogue = cat.tracks;
     const seenUri = new Set(recommended.map((t) => t.uri));
     const candidates = recommended.concat(catalogue.filter((t) => !seenUri.has(t.uri) && seenUri.add(t.uri)));
@@ -1444,7 +1441,8 @@ window.__betterMixExtensionLoaded = true;
   // Must END with "Mix" or "Mix <number>" ("Daily Mix 3"): song-radio
   // playlists share the id prefix and can carry "Mix" mid-name
   // ("… DJ Gius Mix, Radio Edit Radio").
-  const isMix = (name, id) => MIX_ID.test(id) && /\bmix(\s+\d+)?\s*$/i.test(String(name).trim());
+  const LEAVE_ALONE = /\b\d{2,3}\s*bpm\b/i;   // tempo mixes stay Spotify's own (see the builder half)
+  const isMix = (name, id) => MIX_ID.test(id) && /\bmix(\s+\d+)?\s*$/i.test(String(name).trim()) && !LEAVE_ALONE.test(String(name));
 
   // Shelves to hide by heading, beyond the auto-detected mix rows. These are
   // Spotify's promotional picks -- a single album pushed at you -- not mixes.
