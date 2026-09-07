@@ -393,6 +393,7 @@ window.__betterMixExtensionLoaded = true;
       album: { uri: t.albumOfTrack?.uri, name: t.albumOfTrack?.name, imageUrl: t.albumOfTrack?.coverArt?.sources?.[0]?.url || image, largeImageUrl: t.albumOfTrack?.coverArt?.sources?.slice(-1)?.[0]?.url || image },
       plays: Number(t.playcount) || null,
     }));
+    top.length = Math.min(top.length, 10);
     top.forEach((t) => { t.popularity = popFromPlays(t.plays); t.src = "catalogue"; });
     const sorted = [...releases.values()].sort((x, y) => (y.year || 0) - (x.year || 0));
     // When this artist's popular releases came out: their era, roughly.
@@ -499,7 +500,7 @@ window.__betterMixExtensionLoaded = true;
         }
       };
       await Promise.all(Array.from({ length: 5 }, worker));
-      saveCache(ART_KEY, artistCache, 3000);
+      saveCache(ART_KEY, artistCache, 500);
       logLine(`  fit: this mix's league is ~${Math.round(league.listeners / 1e6)}M monthly listeners, era ~${league.era}` +
         ` · ${ok} other artists fit, ${unrelated} related to fewer than ${needRelated} of its artists, ${outOfLeague} wrong league or era` +
         (vibeKnown ? `, ${offVibe} different vibe (no shared playlists)` : " · no discovered-on data, vibe check off") + (unknown ? `, ${unknown} unknown` : ""));
@@ -549,7 +550,7 @@ window.__betterMixExtensionLoaded = true;
       }
     };
     await Promise.all(Array.from({ length: 5 }, worker));
-    saveCache(ART_KEY, artistCache, 3000); saveCache(ALB_KEY, albumCache, 1500); saveMeta();
+    saveCache(ART_KEY, artistCache, 500); saveCache(ALB_KEY, albumCache, 250); saveMeta();
     logLine(`  catalogue: ${artists} mix artists (${albums + cached} releases, ${cached} cached) + ${related} similar artists` +
       ` (${skipped} related you already play, ${unlike} not similar enough) → ${out.length} tracks over ${MIN_PLAYS / 1e6}M plays` +
       (failed ? ` · ${failed} lookups failed` : "") + (Date.now() > deadline ? " · time budget reached" : ""));
@@ -855,7 +856,18 @@ window.__betterMixExtensionLoaded = true;
   const VIRT_KEY = "better-mix:virtual";
   const readVirtual = () => { try { return JSON.parse(localStorage.getItem(VIRT_KEY)) || []; } catch { return []; } };
   const writeVirtual = (list) => {
-    try { localStorage.setItem(VIRT_KEY, JSON.stringify(list)); } catch (e) { console.warn("[better-mix] store write failed", e); }
+    const json = JSON.stringify(list);
+    try { localStorage.setItem(VIRT_KEY, json); }
+    catch (e) {
+      // Spotify's storage is ~10MB per origin. The mixes matter more than
+      // any cache: throw the caches away and try once more. Without this a
+      // full store meant every build silently vanished and the next trigger
+      // rebuilt everything, again and again.
+      console.warn("[better-mix] store write failed — clearing caches and retrying", e?.name || e);
+      for (const k of ["better-mix:albums", "better-mix:artists2", "better-mix:artists", "better-mix:trackmeta"]) { try { localStorage.removeItem(k); } catch {} }
+      try { localStorage.setItem(VIRT_KEY, json); }
+      catch (e2) { Spicetify.showNotification("Better Mix: Spotify's storage is full — mixes can't be saved", true); console.error("[better-mix] store write failed twice", e2); }
+    }
     window.dispatchEvent(new Event("better-mix:updated"));
   };
   // PlaylistAPI.getContents items aren't shaped like recommender tracks:
@@ -1120,8 +1132,13 @@ window.__betterMixExtensionLoaded = true;
   const dailyNum = (m) => parseInt(String(m.name).replace(/\D/g, ""), 10) || 0;
   const dailyMixes = () => spotifyMixes().filter((m) => /^daily mix/i.test(m.name)).sort((a, b) => dailyNum(a) - dailyNum(b));
 
+  let lastPassAt = 0;
   async function autoBuild(reason) {
     if (!enabled || building) return;
+    // The Home page re-renders after every build, and each re-render says
+    // "Home changed". If the pass that just finished didn't stick, that
+    // would start it over immediately, forever. Once per quarter hour.
+    if (reason === "Home changed" && Date.now() - lastPassAt < 15 * 60 * 1000) return;
     const store = readVirtual();
     const entry = (m) => store.find((x) => x.sourceUri === m.uri);
     const seen = new Set();
@@ -1134,6 +1151,7 @@ window.__betterMixExtensionLoaded = true;
     const due = [...dueDaily, ...dueWeekly];
     if (!due.length) return;
     console.log(`[better-mix] auto-building ${due.length} mixes (${dueDaily.length} daily-tier, ${dueWeekly.length} weekly-tier) — ${reason}: ${due.map((m) => m.name).join(", ")}`);
+    lastPassAt = Date.now();
     Spicetify.showNotification(`Building today's mixes (${due.length}) — a few minutes in the background`);
     const prevLog = logLine;
     logLine = (m) => console.log("[better-mix]", m);
