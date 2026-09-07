@@ -41,6 +41,17 @@ out.errors = errs;
 JSON.stringify(out);
 EOF
 fail=0
+# index.js is the custom app's page: it can't be *run* here (it needs React at
+# module scope) but it must at least parse, and nothing was checking that.
+for f in better-mix/index.js; do
+  osascript -l JavaScript -e "
+    ObjC.import('Foundation');
+    var src = \$.NSString.stringWithContentsOfFileEncodingError('$PWD/$f', \$.NSUTF8StringEncoding, null).js;
+    new Function(src); 'ok'" >/dev/null 2>&1 \
+    && printf "  ok    %s (parse)\n" "$f" \
+    || { printf "  FAIL  %s does not parse\n" "$f"; exit 1; }
+done
+
 for f in better-mix/better-mix.js; do
   sed "s|FILE|'$PWD/$f'|g" "$D/smoke.js" > "$D/run.js"
   r=$(osascript -l JavaScript "$D/run.js" 2>&1 | tail -1)

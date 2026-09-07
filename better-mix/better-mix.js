@@ -822,13 +822,27 @@ window.__betterMixExtensionLoaded = true;
     const store = readVirtual();
     const entry = store.find((x) => x.id === id);
     if (!entry?.savedUri) return;
+    // remove() maps over its argument as `x.uid ?? x.uri`, so it wants
+    // objects, not URI strings. Passing strings yielded [undefined], the
+    // modification failed, and Spotify reverted its own optimistic removal --
+    // the playlist reappearing was their rollback, not ours.
+    const uri = entry.savedUri;
     try {
-      await P().RootlistAPI.remove([entry.savedUri]);
+      await P().RootlistAPI.remove([{ uri }]);
+      // remove() swallows its own failures, so confirm rather than assume.
+      const still = await P().RootlistAPI.contains(uri).catch(() => null);
+      if (Array.isArray(still) ? still[0] : still) {
+        throw new Error("Spotify kept the playlist in your library");
+      }
     } catch (e) {
-      console.warn("[better-mix] couldn't remove the playlist from your library:", e);
+      console.warn("[better-mix] couldn't remove the playlist:", e);
+      throw new Error("couldn't remove it from your library — unlinking it here instead");
+    } finally {
+      // Either way stop calling it saved: a link to a playlist that may no
+      // longer exist is worse than no link.
+      entry.savedUri = null;
+      writeVirtual(store);
     }
-    entry.savedUri = null;
-    writeVirtual(store);
   }
 
   // Promote a virtual mix to a real playlist. Called from the card's "save".
