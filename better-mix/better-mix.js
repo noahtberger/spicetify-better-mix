@@ -367,6 +367,15 @@ window.__betterMixExtensionLoaded = true;
     }
     diag({ artistSource: how });
     const a = r?.data?.artistUnion || {};
+    // The playlists Spotify says this artist was "discovered on" -- as close
+    // to a genre label as the client exposes. Two artists on the same sad-rap
+    // playlists share a sound; two who are merely related share a scene.
+    let on = [];
+    try {
+      const d2 = await gql("queryArtistDiscoveredOn", { uri, locale: "" }, 8000, "discovered-on playlists");
+      const items = d2?.data?.artistUnion?.relatedContent?.discoveredOnV2?.items || d2?.data?.artistUnion?.relatedContent?.discoveredOn?.items || [];
+      on = items.map((it) => it?.data?.uri || it?.uri).filter(Boolean).slice(0, 30);
+    } catch (e) { diag({ discoveredOn: String(e?.message || e) }); }
     const d = a.discography || {};
     const rel = (x) => x && x.uri ? { uri: x.uri, year: x.date?.year ?? null, name: x.name } : null;
     const releases = new Map();
@@ -395,6 +404,7 @@ window.__betterMixExtensionLoaded = true;
       era: eraYears.length ? eraYears[Math.floor(eraYears.length / 2)] : (sorted[0]?.year ?? null),
       releases: sorted,
       related: (a.relatedContent?.relatedArtists?.items || []).map((x) => x?.uri).filter(Boolean).slice(0, 8),
+      on,
       top,
     };
     artistCache.set(uri, info);
@@ -456,28 +466,43 @@ window.__betterMixExtensionLoaded = true;
   // the gate switches itself off and says so rather than emptying the mix.
   async function artistGate(candidates, seedInfos, mixArtists) {
     const league = { listeners: median(seedInfos.map((i) => i.listeners)), era: median(seedInfos.map((i) => i.era)) };
-    const relatedTo = new Set(seedInfos.flatMap((i) => i.related || []));
+    // How many of the mix's artists each outside artist is related to.
+    const relatedTo = new Map();
+    for (const i of seedInfos) for (const r of i.related || []) relatedTo.set(r, (relatedTo.get(r) || 0) + 1);
+    const needRelated = seedInfos.length >= 4 ? 2 : 1;
+    // Playlists the mix's artists were discovered on, and how many of them share each.
+    const seedOn = new Map();
+    for (const i of seedInfos) for (const pl of i.on || []) seedOn.set(pl, (seedOn.get(pl) || 0) + 1);
+    const vibeKnown = seedOn.size > 0;
+    const sameVibe = (info) => {
+      if (!vibeKnown || !(info.on || []).length) return true;   // no data either side: can't judge, don't cut
+      const shared = info.on.filter((pl) => seedOn.has(pl)).length;
+      return shared >= 2 || shared / info.on.length >= 0.25;
+    };
     const on = !!league.listeners;
     const uris = [...new Set(candidates.map((t) => t.artists?.[0]?.uri).filter((u) => u && !mixArtists.has(u)))];
     const verdict = new Map();
-    let unrelated = 0, outOfLeague = 0, unknown = 0, ok = 0;
+    let unrelated = 0, outOfLeague = 0, unknown = 0, ok = 0, offVibe = 0;
     if (on) {
       const deadline = Date.now() + 30000;
       let i = 0;
       const worker = async () => {
         while (i < uris.length && Date.now() < deadline) {
           const u = uris[i++];
-          if (!relatedTo.has(u)) { verdict.set(u, false); unrelated++; continue; }
+          if ((relatedTo.get(u) || 0) < needRelated) { verdict.set(u, false); unrelated++; continue; }
           try {
             const info = await artistInfo(u);
-            const v = similar(league, info); verdict.set(u, v); v ? ok++ : outOfLeague++;
+            if (!similar(league, info)) { verdict.set(u, false); outOfLeague++; continue; }
+            if (!sameVibe(info)) { verdict.set(u, false); offVibe++; continue; }
+            verdict.set(u, true); ok++;
           } catch { verdict.set(u, false); unknown++; }
         }
       };
       await Promise.all(Array.from({ length: 5 }, worker));
       saveCache(ART_KEY, artistCache, 3000);
       logLine(`  fit: this mix's league is ~${Math.round(league.listeners / 1e6)}M monthly listeners, era ~${league.era}` +
-        ` · ${ok} other artists fit, ${unrelated} unrelated to its artists, ${outOfLeague} wrong league or era` + (unknown ? `, ${unknown} unknown` : ""));
+        ` · ${ok} other artists fit, ${unrelated} related to fewer than ${needRelated} of its artists, ${outOfLeague} wrong league or era` +
+        (vibeKnown ? `, ${offVibe} different vibe (no shared playlists)` : " · no discovered-on data, vibe check off") + (unknown ? `, ${unknown} unknown` : ""));
     } else {
       logLine("  fit: no listener numbers from Spotify's artist pages — fit filter off");
     }
@@ -1057,7 +1082,7 @@ window.__betterMixExtensionLoaded = true;
   let enabled = (() => { try { return localStorage.getItem(ENABLED_KEY) !== "false"; } catch { return true; } })();
   // Bump when the selection rules change. Mixes built under older rules get
   // rebuilt automatically at the next startup instead of waiting a day.
-  const RULES_VERSION = 15;  // 15: the mix's own artists first, similar artists a capped minority, nobody else
+  const RULES_VERSION = 16;  // 16: similar = related to 2+ of the mix's artists and sharing their playlists
   const readCurrent = () => { try { return JSON.parse(localStorage.getItem(CUR_KEY)) || []; } catch { return []; } };
 
   // Keep the store bounded. It was 1.5 MB at 78 mixes and grew with every
