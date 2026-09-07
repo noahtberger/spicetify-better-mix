@@ -154,6 +154,10 @@ window.__betterMixExtensionLoaded = true;
     basePromise = fetchBase().finally(() => { basePromise = null; });
     return basePromise;
   }
+  // 50 recent plays and 300 library tracks was far too small a definition of
+  // "you already know this" -- songs someone plays constantly slipped through
+  // as new. Your own playlists are the strongest signal there is: you put
+  // those there on purpose.
   async function fetchBase() {
     const tracks = new Set(), artists = new Set();
     const note = (t) => {
@@ -164,11 +168,27 @@ window.__betterMixExtensionLoaded = true;
       const recent = await P().AssistedCurationAPI.getRecentlyPlayedTracks({ limit: 50 });
       (recent || []).forEach((u) => typeof u === "string" && tracks.add(u));
     } catch (e) { logLine("recently-played unavailable: " + e.message); }
-    try {
-      const lib = await P().LibraryAPI.getTracks({ limit: 300 });
-      (lib?.items || []).forEach(note);
+
+    try {   // the whole library, not the first page of it
+      for (let off = 0; off < 5000; off += 500) {
+        const lib = await P().LibraryAPI.getTracks({ limit: 500, offset: off });
+        const items = lib?.items || [];
+        items.forEach(note);
+        if (items.length < 500) break;
+      }
     } catch (e) { logLine("library unavailable: " + e.message); }
+
+    try {   // every track in every playlist you made
+      const rl = await P().RootlistAPI.getContents({ limit: 200 });
+      const mine = (rl?.items || []).filter((x) => String(x?.uri).includes(":playlist:")).slice(0, 60);
+      for (const pl of mine) {
+        try { (await playlistTracks(pl.uri)).forEach(note); } catch {}
+      }
+      logLine(`known: read ${mine.length} of your playlists`);
+    } catch (e) { logLine("playlists unavailable: " + e.message); }
+
     base = { tracks, artists }; baseAt = Date.now();
+    logLine(`known: ${tracks.size} tracks / ${artists.size} artists you already listen to`);
     return base;
   }
 
@@ -203,10 +223,17 @@ window.__betterMixExtensionLoaded = true;
   const POP_TARGET = 66;
   const POP_BAND = 12;      // free inside +/- this, penalised beyond
 
-  // 2. Prefer artists with several tracks in the candidate pool. A one-hit
-  //    wonder contributes exactly one mega-hit; an artist worth discovering
-  //    has a catalogue the recommender keeps reaching into.
-  const DEPTH_BONUS = 7;    // per extra track by the same artist, capped
+  // 2. Exclude one-hit wonders outright rather than scoring around them: an
+  //    artist with a single track in the pool, and that track a big hit, is a
+  //    song everyone knows rather than an artist worth finding. (An earlier
+  //    version gave a BONUS for catalogue depth, which backfired -- the
+  //    artists with deep catalogues in Spotify's recommendations are exactly
+  //    the mainstream ones.)
+  const OHW_POP = 74;       // a lone track above this is a famous single
+
+  // 3. Vary between rebuilds. Scoring was fully deterministic, so pressing
+  //    rebuild returned the same songs in the same order every time.
+  const JITTER = 7;
 
   // 3. A track already used in another mix costs points, so the same famous
   //    handful doesn't fill everything. Soft, not a ban: genuinely similar
@@ -265,30 +292,29 @@ window.__betterMixExtensionLoaded = true;
     // The step Spotify won't do: drop anything you already play.
     const perArtist = new Map();
     const fresh = [];
-    let cutTrack = 0, cutArtist = 0, cutCap = 0, cutTheme = 0;
+    let cutTrack = 0, cutArtist = 0, cutCap = 0, cutTheme = 0, cutOHW = 0;
 
-    // How many tracks each artist has in this pool -- catalogue depth.
+    // How many tracks each artist has in this pool, to spot one-hit wonders.
     const depth = new Map();
     for (const t of candidates) {
       for (const k of artistKeys(t)) depth.set(k, (depth.get(k) || 0) + 1);
     }
     const depthOf = (t) => Math.max(0, ...artistKeys(t).map((k) => depth.get(k) || 0));
+    const oneHitWonder = (t) => depthOf(t) <= 1 && (t.popularity || 0) >= OHW_POP;
 
     const score = (t) => {
       const pop = t.popularity || 0;
+      // Distance outside the band is the dominant term now: a song everyone
+      // knows should lose to a decent one they don't, not edge it out.
       const outside = Math.max(0, Math.abs(pop - POP_TARGET) - POP_BAND);
-      // The recommender's own relevance score for THIS playlist -- a better
-      // measure of fit than global popularity, when it gives us one.
-      const fit = typeof t.score === "number" ? t.score * 0.35 : pop * 0.35;
-      return fit
-        - outside * 1.1
-        + Math.min(4, depthOf(t) - 1) * DEPTH_BONUS
+      return -outside * 2.2 + Math.random() * JITTER
         - SPREAD_PENALTY * (used.get(t.uri) || 0);
     };
     for (const t of candidates.sort((a, b) => score(b) - score(a))) {
       if (known.tracks.has(t.uri)) { cutTrack++; continue; }
       if ((t.artists || []).some((a) => known.artists.has(a.uri || a.id))) { cutArtist++; continue; }
       if (offTheme(t)) { cutTheme++; continue; }
+      if (oneHitWonder(t)) { cutOHW++; continue; }
 
       const key = t.artists?.[0]?.uri ?? "?";
       if ((perArtist.get(key) || 0) >= maxPerArtist) { cutCap++; continue; }
@@ -298,7 +324,8 @@ window.__betterMixExtensionLoaded = true;
     }
 
     logLine(`filtered: -${cutTrack} already played, -${cutArtist} your artists, -${cutCap} artist cap` +
-      (theme ? `, -${cutTheme} off-script (${rescued} romanised tracks kept via their artists)` : ""));
+      (theme ? `, -${cutTheme} off-script (${rescued} romanised tracks kept via their artists)` : "") +
+      (cutOHW ? `, -${cutOHW} one-hit wonders` : ""));
     const reused = fresh.filter((t) => used.get(t.uri)).length;
     const pops = fresh.map((t) => t.popularity || 0).sort((a, b) => a - b);
     const med = pops.length ? pops[Math.floor(pops.length / 2)] : 0;
@@ -329,10 +356,18 @@ window.__betterMixExtensionLoaded = true;
       }
       // stage 2: songs you haven't played, by artists Spotify put in THIS mix.
       // Not "any artist you know" -- that's precisely how rap got into J-Pop.
-      for (const t of pool) {
+      //
+      // Sorted toward the middle of the popularity range rather than taking
+      // the pool's order, which was popularity-first. If a mix is going to be
+      // filled with artists you already play, it should at least be their
+      // album tracks and not the singles you've heard a thousand times.
+      const DEEP_TARGET = 58;
+      const byDepth = pool
+        .filter((t) => !have.has(t.uri) && !offTheme(t) && artistKeys(t).some((k) => sourceArtists.has(k)))
+        .sort((a, b) => Math.abs((a.popularity || 0) - DEEP_TARGET) - Math.abs((b.popularity || 0) - DEEP_TARGET));
+      for (const t of byDepth) {
         if (fresh.length >= total) break;
-        if (have.has(t.uri) || offTheme(t)) continue;
-        if (!artistKeys(t).some((k) => sourceArtists.has(k))) continue;
+        if (have.has(t.uri)) continue;
         t.why = "top-up:mix-artist";
         have.add(t.uri); fresh.push(t); knownUp++;
       }
@@ -632,7 +667,7 @@ window.__betterMixExtensionLoaded = true;
   let enabled = (() => { try { return localStorage.getItem(ENABLED_KEY) !== "false"; } catch { return true; } })();
   // Bump when the selection rules change. Mixes built under older rules get
   // rebuilt automatically at the next startup instead of waiting a day.
-  const RULES_VERSION = 6;
+  const RULES_VERSION = 7;
   const readCurrent = () => { try { return JSON.parse(localStorage.getItem(CUR_KEY)) || []; } catch { return []; } };
 
   // Keep the store bounded. It was 1.5 MB at 78 mixes and grew with every
