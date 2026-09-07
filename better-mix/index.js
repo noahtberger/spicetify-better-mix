@@ -231,12 +231,17 @@ function MixPage({ mix }) {
              : Spicetify.showNotification("Better Mix isn't loaded", true);
 
   const save = async () => {
-    if (mix.savedUri) return go(`/playlist/${idOf(mix.savedUri)}`);
+    // A toggle, not a link: the green check undoes the save. Going to the
+    // playlist is the separate "Open playlist" button beside it.
     if (!BM?.saveVirtual) return Spicetify.showNotification("Better Mix isn't loaded", true);
+    const undo = !!mix.savedUri;
     setBusy(true);
-    try { await BM.saveVirtual(mix.id); Spicetify.showNotification(`Saved "${mix.name}" to your library`); }
-    catch (e) { Spicetify.showNotification("Couldn't save: " + (e?.message || e), true); }
-    finally { setBusy(false); }
+    try {
+      if (undo) { await BM.unsaveVirtual(mix.id); Spicetify.showNotification(`Removed "${mix.name}" from your library`); }
+      else { await BM.saveVirtual(mix.id); Spicetify.showNotification(`Saved "${mix.name}" to your library`); }
+    } catch (e) {
+      Spicetify.showNotification((undo ? "Couldn't remove: " : "Couldn't save: ") + (e?.message || e), true);
+    } finally { setBusy(false); }
   };
 
   const link = (label, path) =>
@@ -269,8 +274,11 @@ function MixPage({ mix }) {
         h("button", { className: "bmx-playbtn", title: "Play", "aria-label": "Play", onClick: () => play(0) }, sicon("play")),
         iconBtn("shuffle", shuffled ? "Disable shuffle" : "Enable shuffle", toggleShuffle, shuffled ? "bmx-on" : ""),
         iconBtn(mix.savedUri ? ["ring", "check"] : ["ring", "plus"],
-          mix.savedUri ? "Open the saved playlist" : "Save as a playlist",
+          mix.savedUri ? "Remove the saved playlist from your library" : "Save as a playlist",
           save, mix.savedUri ? "bmx-on" : "", busy),
+        mix.savedUri
+          ? h("button", { className: "bmx-textbtn", onClick: () => go(`/playlist/${idOf(mix.savedUri)}`) }, "Open playlist")
+          : null,
         iconBtn("refresh", rebuilding ? "Rebuilding…" : "Rebuild this mix", rebuild, rebuilding ? "bmx-spin" : "", rebuilding),
         // No settings button: mixes build themselves on a schedule and aren't
         // meant to be tuned per-mix. Rebuild is the only manual control.

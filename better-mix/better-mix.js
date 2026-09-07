@@ -815,6 +815,22 @@ window.__betterMixExtensionLoaded = true;
   setInterval(() => autoBuild("daily refresh"), 60 * 60 * 1000);
   setTimeout(() => { pruneStore("startup"); autoBuild("startup"); }, 4000);
 
+  // Undo a save: take the playlist out of your library and unlink it, so the
+  // card goes back to offering "save". Without this, saving was one-way --
+  // the button turned into "open" and there was no way back.
+  async function unsaveVirtual(id) {
+    const store = readVirtual();
+    const entry = store.find((x) => x.id === id);
+    if (!entry?.savedUri) return;
+    try {
+      await P().RootlistAPI.remove([entry.savedUri]);
+    } catch (e) {
+      console.warn("[better-mix] couldn't remove the playlist from your library:", e);
+    }
+    entry.savedUri = null;
+    writeVirtual(store);
+  }
+
   // Promote a virtual mix to a real playlist. Called from the card's "save".
   async function saveVirtual(id) {
     const store = readVirtual();
@@ -965,7 +981,7 @@ window.__betterMixExtensionLoaded = true;
   }
 
   // Shared surface for home-mixes.js (and for poking at from the console).
-  window.BetterMix = { ready: true, open: () => openMenu(), rebuildAll, rebuildOne, saveVirtual, play,
+  window.BetterMix = { ready: true, open: () => openMenu(), rebuildAll, rebuildOne, saveVirtual, unsaveVirtual, play,
     getShuffle, setShuffle, virtual: readVirtual, get progress() { return { ...progress }; } };
 
   console.log(`[better-mix] loaded — ${readVirtual().length} mixes in store`);
@@ -1218,15 +1234,21 @@ window.__betterMixExtensionLoaded = true;
   const openPlaylist = (uri) =>
     Spicetify.Platform.History.push(`/playlist/${String(uri).split(":").pop()}`);
 
-  async function saveMix(mix, cardEl) {
+  async function toggleSave(mix, cardEl) {
     const BM = window.BetterMix;
     if (!BM?.saveVirtual) return Spicetify.showNotification("Better Mix isn't loaded", true);
+    const undo = !!mix.savedUri;
     cardEl.classList.add("hmx-busy");
     try {
-      await BM.saveVirtual(mix.id);       // writes savedUri + fires the update event
-      Spicetify.showNotification(`Saved "${mix.name}" to your library`);
+      if (undo) {
+        await BM.unsaveVirtual(mix.id);
+        Spicetify.showNotification(`Removed "${mix.name}" from your library`);
+      } else {
+        await BM.saveVirtual(mix.id);     // writes savedUri + fires the update event
+        Spicetify.showNotification(`Saved "${mix.name}" to your library`);
+      }
     } catch (e) {
-      Spicetify.showNotification("Couldn't save: " + (e?.message || e), true);
+      Spicetify.showNotification((undo ? "Couldn't remove: " : "Couldn't save: ") + (e?.message || e), true);
     } finally {
       cardEl.classList.remove("hmx-busy");
     }
@@ -1265,15 +1287,17 @@ window.__betterMixExtensionLoaded = true;
       <div class="hmx-name" title="${esc(mix.name)}">${esc(mix.name)}</div>
       <div class="hmx-meta">
         <span>${(mix.tracks || []).length} songs${saved ? " · saved" : ""}</span>
-        <button class="hmx-save" title="${saved ? "Open the saved playlist" : "Save as a real playlist"}">${saved ? "open" : "save"}</button>
+        <button class="hmx-save" title="${saved ? "Remove the saved playlist from your library" : "Save as a real playlist"}">${saved ? "saved ✓" : "save"}</button>
       </div>`;
 
     el.querySelector(".hmx-art").onclick = () => openMix(mix);
     el.querySelector(".hmx-name").onclick = () => openMix(mix);
     el.querySelector(".hmx-play").onclick = (e) => { e.stopPropagation(); playMix(mix); };
+    // A toggle, not a link. Clicking it used to navigate to the playlist,
+    // which read as the button doing nothing except moving you somewhere.
     el.querySelector(".hmx-save").onclick = (e) => {
       e.stopPropagation();
-      saved ? openPlaylist(mix.savedUri) : saveMix(mix, el);
+      toggleSave(mix, el);
     };
     return el;
   }
