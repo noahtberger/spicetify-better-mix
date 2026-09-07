@@ -422,7 +422,10 @@ window.__betterMixExtensionLoaded = true;
           const info = await artistInfo(uri);
           if (depth === 0) {
             artists++;
-            // a mix artist: their newer album tracks, not their top hits
+            // a mix artist: their newest releases (albums, EPs and singles
+            // alike) plus their most-played songs. What you've already
+            // played is removed later, so this is "their songs you haven't".
+            info.top.forEach(take);
             for (const rel of info.releases.slice(0, releasesPer)) {
               if (Date.now() > deadline) break;
               if (albumCache.has(rel.uri)) cached++; else albums++;
@@ -660,10 +663,11 @@ window.__betterMixExtensionLoaded = true;
       // filled with artists you already play, it should at least be their
       // album tracks and not the singles you've heard a thousand times.
       // Picked with the same era-aware, jittered scoring as the strict pass
-      // (aimed lower on the popularity scale), and capped per artist. A plain
-      // sort here was deterministic, so with a big pool every rebuild would
-      // still pick the identical fifty.
-      const DEEP_TARGET = 58;
+      // and the same popularity target -- this used to aim lower, which read
+      // as "album tracks only" -- and capped per artist. A plain sort here
+      // was deterministic, so with a big pool every rebuild would still pick
+      // the identical fifty.
+      const DEEP_TARGET = POP_TARGET;
       const deepScore = (t) => {
         const plays = playsOf(t);
         return -Math.abs((t.popularity || 0) - DEEP_TARGET) * 1.5
@@ -1018,7 +1022,7 @@ window.__betterMixExtensionLoaded = true;
   let enabled = (() => { try { return localStorage.getItem(ENABLED_KEY) !== "false"; } catch { return true; } })();
   // Bump when the selection rules change. Mixes built under older rules get
   // rebuilt automatically at the next startup instead of waiting a day.
-  const RULES_VERSION = 10;  // 10: similar artists one step out, same league and era, semi-popular songs only
+  const RULES_VERSION = 11;  // 11: mix artists' top songs count too; one popularity target for every stage
   const readCurrent = () => { try { return JSON.parse(localStorage.getItem(CUR_KEY)) || []; } catch { return []; } };
 
   // Keep the store bounded. It was 1.5 MB at 78 mixes and grew with every
