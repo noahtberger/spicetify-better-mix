@@ -237,22 +237,42 @@ window.__betterMixExtensionLoaded = true;
     if (!missing.length) return;
     logLine(`  looking up ${missing.length} release dates…`);
 
+    // Every request gets a deadline. Without one, a single call that never
+    // resolves hangs the whole build -- and because a build holds the lock,
+    // that also blocks every later build until Spotify is reloaded.
+    const withTimeout = (promise, ms) => Promise.race([
+      promise,
+      new Promise((_, rej) => setTimeout(() => rej(new Error("timed out")), ms)),
+    ]);
+
+    // A ceiling on the whole lookup too, so a slow network degrades the mix
+    // rather than stopping it: whatever arrived in time gets used, the rest
+    // are treated as unknown and looked up on a later build.
+    const deadline = Date.now() + 90_000;
+    let done = 0, timedOut = 0;
+
     // Eight at a time: enough to be quick, gentle enough not to be throttled.
     let i = 0;
     const worker = async () => {
       while (i < missing.length) {
+        if (Date.now() > deadline) return;
         const uri = missing[i++];
         try {
-          const r = await G.Request(G.Definitions.getTrack, { uri });
+          const r = await withTimeout(G.Request(G.Definitions.getTrack, { uri }), 8000);
           const t = r?.data?.trackUnion;
           meta.set(uri, [t?.albumOfTrack?.date?.year ?? null, Number(t?.playcount) || null]);
-        } catch {
+        } catch (e) {
+          if (String(e?.message).includes("timed out")) timedOut++;
           meta.set(uri, [null, null]);   // remember the failure, don't retry every build
         }
+        // Save as we go, so a stall or a restart doesn't throw away the work.
+        if (++done % 200 === 0) saveMeta();
       }
     };
     await Promise.all(Array.from({ length: 8 }, worker));
     saveMeta();
+    if (timedOut) logLine(`  ${timedOut} lookups timed out — those tracks are treated as unknown`);
+    if (Date.now() > deadline) logLine("  lookup budget reached; remaining tracks will be filled in on a later build");
   }
   const yearOf = (t) => meta.get(t?.uri)?.[0] ?? null;
   const playsOf = (t) => meta.get(t?.uri)?.[1] ?? null;
