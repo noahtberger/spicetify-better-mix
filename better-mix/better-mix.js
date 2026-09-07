@@ -282,6 +282,134 @@ window.__betterMixExtensionLoaded = true;
   const yearOf = (t) => meta.get(t?.uri)?.[0] ?? null;
   const playsOf = (t) => meta.get(t?.uri)?.[1] ?? null;
 
+  // --- Second source: the artists' own catalogues ---------------------------
+  // The recommender hands back ~100 tracks per mix and they are, almost
+  // without exception, hits: for a hip hop mix the median track had 641M
+  // plays, 36 of 50 were 6-12 years old and none were from the last two
+  // years. Ranking can only reorder what's in the pool, and with ~60 usable
+  // tracks for 50 slots there was nothing to reorder -- which is also why a
+  // rebuild changed three songs at the end and nothing else.
+  //
+  // So ask for what the recommender never offers: each mix artist's newest
+  // releases (album tracks, not the singles you've heard a thousand times)
+  // and the newest releases of the artists Spotify lists as related to them,
+  // who you mostly won't know. Album pages carry a play count and a year for
+  // every track, so these need none of the per-track lookups above.
+  const ART_KEY = "better-mix:artists";   // artist uri -> { at, name, releases:[{uri,year}], related:[uri] }
+  const ALB_KEY = "better-mix:albums";    // album uri  -> { year, tracks:[...] }
+  const loadCache = (k) => { try { return new Map(Object.entries(JSON.parse(localStorage.getItem(k)) || {})); } catch { return new Map(); } };
+  const artistCache = loadCache(ART_KEY), albumCache = loadCache(ALB_KEY);
+  const saveCache = (k, m, cap) => {
+    try { localStorage.setItem(k, JSON.stringify(Object.fromEntries([...m.entries()].slice(-cap)))); }
+    catch (e) { console.warn("[better-mix] couldn't save", k, e); }
+  };
+  const ARTIST_TTL = 7 * 24 * 3600 * 1000;   // a week: new releases show up within days
+
+  // Album tracks don't come with the 0-100 popularity score the recommender
+  // gives, but they do come with play counts, which is the better number
+  // anyway. Map plays onto the same scale so one ranking serves both sources:
+  // 1M plays ~ 30, 10M ~ 45, 100M ~ 60, 1B ~ 75.
+  const popFromPlays = (n) => n ? Math.max(0, Math.min(100, Math.round(15 * Math.log10(n) - 60))) : 0;
+
+  const gql = async (name, vars, ms, label) => {
+    const G = Spicetify.GraphQL;
+    if (!G?.Definitions?.[name]) throw new Error(`Spotify has no ${name} query in this build`);
+    return timed(G.Request(G.Definitions[name], vars), ms, label);
+  };
+
+  // What an artist has put out lately, plus who Spotify says is like them.
+  async function artistInfo(uri) {
+    const c = artistCache.get(uri);
+    if (c && Date.now() - c.at < ARTIST_TTL) return c;
+    let r;
+    try {
+      r = await gql("queryArtistOverview", { uri, locale: "", includePrerelease: false, enableAssociatedVideos: false }, 10000, "an artist page");
+    } catch (e) {
+      r = await gql("queryArtistDiscographyAlbums", { uri, offset: 0, limit: 10 }, 10000, "an artist discography");
+    }
+    const a = r?.data?.artistUnion || {};
+    const d = a.discography || {};
+    const rel = (x) => x && x.uri ? { uri: x.uri, year: x.date?.year ?? null, name: x.name } : null;
+    const releases = new Map();
+    const add = (x) => { const v = rel(x); if (v && !releases.has(v.uri)) releases.set(v.uri, v); };
+    add(d.latest);
+    (d.popularReleasesAlbums?.items || []).forEach(add);
+    for (const g of [d.albums, d.singles, d.compilations]) (g?.items || []).forEach((it) => add(it?.releases?.items?.[0] || it));
+    const info = {
+      at: Date.now(),
+      name: a.profile?.name || "",
+      releases: [...releases.values()].sort((x, y) => (y.year || 0) - (x.year || 0)),
+      related: (a.relatedContent?.relatedArtists?.items || []).map((x) => x?.uri).filter(Boolean).slice(0, 6),
+    };
+    artistCache.set(uri, info);
+    return info;
+  }
+
+  async function albumTracks(album) {
+    const c = albumCache.get(album.uri);
+    if (c) return c.tracks;
+    const r = await gql("getAlbum", { uri: album.uri, locale: "", offset: 0, limit: 50 }, 10000, "an album");
+    const al = r?.data?.albumUnion || {};
+    const items = al.tracksV2?.items || al.tracks?.items || [];
+    const year = al.date?.year ?? album.year ?? null;
+    const image = al.coverArt?.sources?.[0]?.url || null;
+    const tracks = items.map((it) => it?.track || it).filter((t) => t?.uri).map((t) => {
+      const plays = Number(t.playcount) || null;
+      meta.set(t.uri, [year, plays]);
+      return {
+        uri: t.uri, name: t.name,
+        duration: t.duration?.totalMilliseconds ?? null,
+        artists: (t.artists?.items || []).map((x) => ({ uri: x?.uri, name: x?.profile?.name || x?.name })),
+        album: { uri: album.uri, name: al.name || album.name, imageUrl: image, largeImageUrl: image },
+        popularity: popFromPlays(plays), plays, year, src: "catalogue",
+      };
+    });
+    albumCache.set(album.uri, { year, tracks });
+    return tracks;
+  }
+
+  // For a handful of the mix's artists and their related artists, the
+  // tracks from their few newest releases. Bounded in every direction --
+  // artists, releases per artist, time -- because it runs for every mix.
+  // Related artists you already play are no use as a source of new songs --
+  // Drake's related artists are Future and 21 Savage, and you play those too.
+  // So a related artist you know isn't mined for albums; instead *their*
+  // related artists are looked at, one step further out, until it reaches
+  // people you don't play. That's where Rio Da Yung OG lives.
+  async function catalogueTracks(artistUris, known, { releasesPer = 3, budgetMs = 60000, maxArtists = 70 } = {}) {
+    if (!Spicetify.GraphQL?.Definitions) return [];
+    const deadline = Date.now() + budgetMs;
+    const out = [], seen = new Set();
+    let artists = 0, related = 0, albums = 0, cached = 0, failed = 0, skipped = 0;
+    const queue = artistUris.map((uri) => ({ uri, depth: 0 }));
+    const visited = new Set(artistUris);
+    let i = 0;
+    const worker = async () => {
+      while (i < queue.length && Date.now() < deadline) {
+        const { uri, depth } = queue[i++];
+        try {
+          const info = await artistInfo(uri);
+          depth ? related++ : artists++;
+          const isKnown = depth > 0 && known.artists.has(uri);
+          const fanOut = depth === 0 ? 3 : isKnown ? 2 : 0;
+          if (depth < 3 && queue.length < maxArtists)
+            for (const r of info.related.slice(0, fanOut)) if (!visited.has(r)) { visited.add(r); queue.push({ uri: r, depth: depth + 1 }); }
+          if (isKnown) { skipped++; continue; }
+          for (const rel of info.releases.slice(0, releasesPer)) {
+            if (Date.now() > deadline) break;
+            if (albumCache.has(rel.uri)) cached++; else albums++;
+            for (const t of await albumTracks(rel)) if (!seen.has(t.uri)) { seen.add(t.uri); out.push(t); }
+          }
+        } catch (e) { failed++; if (failed <= 2) logLine(`  catalogue: ${e?.message || e}`); }
+      }
+    };
+    await Promise.all(Array.from({ length: 5 }, worker));
+    saveCache(ART_KEY, artistCache, 3000); saveCache(ALB_KEY, albumCache, 1500); saveMeta();
+    logLine(`  catalogue: ${artists} mix artists + ${related} related (${skipped} of them you already play, followed further) → ${albums + cached} releases (${cached} cached) → ${out.length} tracks` +
+      (failed ? ` · ${failed} lookups failed` : "") + (Date.now() > deadline ? " · time budget reached" : ""));
+    return out;
+  }
+
   // --- Ranking ---------------------------------------------------------------
   // Raw popularity was the wrong signal. It measures how much a track is
   // streamed right now, which for a song outside your library mostly means
@@ -358,8 +486,25 @@ window.__betterMixExtensionLoaded = true;
     const sourceArtists = new Set(source.flatMap(artistKeys));
 
     logLine("asking Spotify what fits this playlist…");
-    const candidates = await recommend(sourceUri, Math.max(120, total * 4));
-    if (!candidates.length) throw new Error("The recommender returned nothing for this playlist.");
+    const recommended = await recommend(sourceUri, Math.max(120, total * 4));
+    if (!recommended.length) throw new Error("The recommender returned nothing for this playlist.");
+
+    // The artists that define this mix: the ones most present in Spotify's
+    // version, plus a few the recommender surfaced that you don't play yet.
+    const artistUri = (t) => (t?.artists || []).map((a) => a?.uri).find((u) => typeof u === "string" && u.startsWith("spotify:artist:"));
+    const tally = new Map();
+    for (const t of source) { const u = artistUri(t); if (u) tally.set(u, (tally.get(u) || 0) + 1); }
+    const seeds = [...tally.entries()].sort((a, b) => b[1] - a[1]).map(([u]) => u).slice(0, 10);
+    for (const t of shuffle(recommended)) {
+      if (seeds.length >= 16) break;
+      const u = artistUri(t);
+      if (u && !seeds.includes(u) && !known.artists.has(u)) seeds.push(u);
+    }
+    logLine("reading those artists' newer releases…");
+    const catalogue = await catalogueTracks(seeds, known);
+    const seenUri = new Set(recommended.map((t) => t.uri));
+    const candidates = recommended.concat(catalogue.filter((t) => !seenUri.has(t.uri) && seenUri.add(t.uri)));
+    logLine(`pool: ${recommended.length} from the recommender + ${candidates.length - recommended.length} from catalogues`);
     await fetchMeta(candidates.map((t) => t.uri));
 
     // Artist-aware script guard. Plenty of Japanese artists release with
@@ -476,14 +621,29 @@ window.__betterMixExtensionLoaded = true;
       // the pool's order, which was popularity-first. If a mix is going to be
       // filled with artists you already play, it should at least be their
       // album tracks and not the singles you've heard a thousand times.
+      // Picked with the same era-aware, jittered scoring as the strict pass
+      // (aimed lower on the popularity scale), and capped per artist. A plain
+      // sort here was deterministic, so with a big pool every rebuild would
+      // still pick the identical fifty.
       const DEEP_TARGET = 58;
-      const byDepth = pool
-        .filter((t) => !have.has(t.uri) && !offTheme(t) && artistKeys(t).some((k) => sourceArtists.has(k)))
-        .sort((a, b) => Math.abs((a.popularity || 0) - DEEP_TARGET) - Math.abs((b.popularity || 0) - DEEP_TARGET));
-      for (const t of byDepth) {
-        if (fresh.length >= total) break;
-        if (have.has(t.uri)) continue;
-        t.why = "top-up:mix-artist";
+      const deepScore = (t) => {
+        const plays = playsOf(t);
+        return -Math.abs((t.popularity || 0) - DEEP_TARGET) * 1.5
+          - (plays ? Math.max(0, Math.log10(plays) - FAMOUS_FROM) * FAMOUS_WEIGHT : 0)
+          - ERA_PENALTY * (eraCount.get(eraOf(t)) || 0)
+          - SPREAD_PENALTY * (used.get(t.uri) || 0)
+          + Math.random() * JITTER * 2;
+      };
+      const byDepth = pool.filter((t) => !have.has(t.uri) && !offTheme(t) && artistKeys(t).some((k) => sourceArtists.has(k)));
+      while (byDepth.length && fresh.length < total) {
+        let bi = 0, bs = -Infinity;
+        for (let k = 0; k < byDepth.length; k++) { const sc = deepScore(byDepth[k]); if (sc > bs) { bs = sc; bi = k; } }
+        const t = byDepth.splice(bi, 1)[0];
+        const key = t.artists?.[0]?.uri ?? "?";
+        if ((perArtist.get(key) || 0) >= maxPerArtist + 1) continue;
+        perArtist.set(key, (perArtist.get(key) || 0) + 1);
+        eraCount.set(eraOf(t), (eraCount.get(eraOf(t)) || 0) + 1);
+        t.why = "top-up:mix-artist"; t.year = yearOf(t);
         have.add(t.uri); fresh.push(t); knownUp++;
       }
 
@@ -806,7 +966,7 @@ window.__betterMixExtensionLoaded = true;
   let enabled = (() => { try { return localStorage.getItem(ENABLED_KEY) !== "false"; } catch { return true; } })();
   // Bump when the selection rules change. Mixes built under older rules get
   // rebuilt automatically at the next startup instead of waiting a day.
-  const RULES_VERSION = 8;
+  const RULES_VERSION = 9;   // 9: artists' catalogues joined the recommender as a source
   const readCurrent = () => { try { return JSON.parse(localStorage.getItem(CUR_KEY)) || []; } catch { return []; } };
 
   // Keep the store bounded. It was 1.5 MB at 78 mixes and grew with every
