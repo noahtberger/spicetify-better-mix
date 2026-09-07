@@ -482,6 +482,7 @@ window.__betterMixExtensionLoaded = true;
       logLine("  fit: no listener numbers from Spotify's artist pages — fit filter off");
     }
     return {
+      on,
       fits: (t) => { const u = t?.artists?.[0]?.uri; return !on || !u || mixArtists.has(u) || verdict.get(u) === true; },
     };
   }
@@ -629,7 +630,7 @@ window.__betterMixExtensionLoaded = true;
     const candidates = recommended.concat(catalogue.filter((t) => !seenUri.has(t.uri) && seenUri.add(t.uri)));
     logLine(`pool: ${recommended.length} from the recommender + ${candidates.length - recommended.length} from catalogues`);
     await fetchMeta(candidates.map((t) => t.uri));
-    const { fits } = await artistGate(candidates, cat.seedInfos, sourcePrimary);
+    const { fits, on: gateOn } = await artistGate(candidates, cat.seedInfos, sourcePrimary);
 
     // Artist-aware script guard. Plenty of Japanese artists release with
     // romanised titles ("Kabutomushi — aiko", "Teenager Forever — King Gnu"),
@@ -646,22 +647,28 @@ window.__betterMixExtensionLoaded = true;
       return true;
     };
 
-    // The step Spotify won't do: drop anything you already play.
+    // Selection, in this order, because a Daily Mix is defined by its
+    // artists and should still read that way once rebuilt:
+    //   A. the mix's own artists: songs of theirs you haven't played, up to
+    //      three each, aimed at the popular end. This is most of the mix.
+    //   B. similar artists: related to the mix's artists per Spotify and in
+    //      their league now. Capped at a share of the mix, and only when
+    //      Spotify's artist data is there to judge "similar" by; without it
+    //      the mix stays with its own artists, which is closer to the
+    //      original than a guess would be.
+    // Anyone else -- an artist you play who isn't in this mix, an artist
+    // unrelated to it -- is out, however good the song. That's how rap got
+    // into J-Pop and Peso Pluma into an emo-rap mix.
+    const SIMILAR_SHARE = 0.3;
     const perArtist = new Map();
+    const eraCount = new Map();
     const fresh = [];
-    let cutTrack = 0, cutArtist = 0, cutCap = 0, cutTheme = 0, cutOHW = 0, cutLow = 0, cutFit = 0;
-
-    // How many tracks each artist has in this pool, to spot one-hit wonders.
+    let cutTrack = 0, cutLow = 0, cutTheme = 0, cutCap = 0, cutFit = 0, cutOHW = 0, cutArtist = 0;
     const depth = new Map();
-    for (const t of candidates) {
-      for (const k of artistKeys(t)) depth.set(k, (depth.get(k) || 0) + 1);
-    }
+    for (const t of candidates) for (const k of artistKeys(t)) depth.set(k, (depth.get(k) || 0) + 1);
     const depthOf = (t) => Math.max(0, ...artistKeys(t).map((k) => depth.get(k) || 0));
     const oneHitWonder = (t) => depthOf(t) <= 1 && (t.popularity || 0) >= OHW_POP;
-
-    // Filled as tracks are picked, so each era gets progressively harder to
-    // add to. Counted here rather than globally: balance within a mix.
-    const eraCount = new Map();
+    const lead = (t) => t?.artists?.[0]?.uri ?? "?";
 
     const score = (t) => {
       const pop = t.popularity || 0;
@@ -674,128 +681,56 @@ window.__betterMixExtensionLoaded = true;
         - SPREAD_PENALTY * (used.get(t.uri) || 0)
         + Math.random() * JITTER;
     };
-    // Eras fill as we go, so a track's score depends on what's already been
-    // picked -- take the best remaining each pass rather than sorting once.
-    const remaining = candidates.slice();
-    while (remaining.length) {
-      let bi = 0, bs = -Infinity;
-      for (let k = 0; k < remaining.length; k++) {
-        const sc = score(remaining[k]);
-        if (sc > bs) { bs = sc; bi = k; }
+    // Best remaining each pass rather than one sort: a track's score depends
+    // on which eras are already in, and the jitter is what makes rebuilds vary.
+    const pick = (pool, { cap, limit, why }) => {
+      const remaining = pool.slice();
+      let n = 0;
+      while (remaining.length && fresh.length < total && n < limit) {
+        let bi = 0, bs = -Infinity;
+        for (let k = 0; k < remaining.length; k++) { const sc = score(remaining[k]); if (sc > bs) { bs = sc; bi = k; } }
+        const t = remaining.splice(bi, 1)[0];
+        const key = lead(t);
+        if ((perArtist.get(key) || 0) >= cap) { cutCap++; continue; }
+        perArtist.set(key, (perArtist.get(key) || 0) + 1);
+        eraCount.set(eraOf(t), (eraCount.get(eraOf(t)) || 0) + 1);
+        t.why = why; t.year = yearOf(t);
+        fresh.push(t); n++;
       }
-      const t = remaining.splice(bi, 1)[0];
-      if (known.tracks.has(t.uri)) { cutTrack++; continue; }
-      if ((t.artists || []).some((a) => known.artists.has(a.uri || a.id))) { cutArtist++; continue; }
-      if (offTheme(t)) { cutTheme++; continue; }
-      if (oneHitWonder(t)) { cutOHW++; continue; }
-      if ((t.popularity || 0) < POP_FLOOR) { cutLow++; continue; }
-      if (!fits(t)) { cutFit++; continue; }
+      return n;
+    };
 
-      const key = t.artists?.[0]?.uri ?? "?";
-      if ((perArtist.get(key) || 0) >= maxPerArtist) { cutCap++; continue; }
-      perArtist.set(key, (perArtist.get(key) || 0) + 1);
-      eraCount.set(eraOf(t), (eraCount.get(eraOf(t)) || 0) + 1);
-      t.why = "new";
-      t.year = yearOf(t);
-      fresh.push(t);
+    const usable = candidates.filter((t) => {
+      if (!t?.uri) return false;
+      if (known.tracks.has(t.uri)) { cutTrack++; return false; }
+      if (offTheme(t)) { cutTheme++; return false; }
+      if ((t.popularity || 0) < POP_FLOOR) { cutLow++; return false; }
+      return true;
+    });
+    const own = usable.filter((t) => sourcePrimary.has(lead(t)));
+    const others = usable.filter((t) => !sourcePrimary.has(lead(t)));
+
+    const a = pick(own, { cap: maxPerArtist + 1, limit: total, why: "mix artist" });
+    let b = 0;
+    if (gateOn) {
+      const similarPool = others.filter((t) => {
+        if ((t.artists || []).some((x) => known.artists.has(x.uri || x.id))) { cutArtist++; return false; }
+        if (!fits(t)) { cutFit++; return false; }
+        if (oneHitWonder(t)) { cutOHW++; return false; }
+        return true;
+      });
+      b = pick(similarPool, { cap: maxPerArtist, limit: Math.round(total * SIMILAR_SHARE), why: "similar artist" });
     }
 
-    logLine(`filtered: -${cutTrack} already played, -${cutArtist} your artists, -${cutCap} artist cap` +
-      (theme ? `, -${cutTheme} off-script (${rescued} romanised tracks kept via their artists)` : "") +
-      (cutOHW ? `, -${cutOHW} one-hit wonders` : "") + (cutLow ? `, -${cutLow} obscure` : "") + (cutFit ? `, -${cutFit} don't fit this mix` : ""));
-    const reused = fresh.filter((t) => used.get(t.uri)).length;
+    logLine(`picked ${a} by this mix's artists (${own.length} usable) + ${b} by similar artists` +
+      (gateOn ? "" : " (none: no artist data to judge similarity, so the mix keeps to its own artists)"));
+    logLine(`  cut: -${cutTrack} already played, -${cutLow} obscure, -${cutCap} over the artist cap` +
+      (cutArtist ? `, -${cutArtist} your artists from other mixes` : "") + (cutFit ? `, -${cutFit} unrelated to this mix` : "") +
+      (cutOHW ? `, -${cutOHW} one-hit wonders` : "") + (theme ? `, -${cutTheme} off-script (${rescued} romanised tracks kept)` : ""));
     const eras = {};
     fresh.forEach((t) => { const e = eraOf(t); eras[e] = (eras[e] || 0) + 1; });
     logLine("  eras: " + (Object.entries(eras).map(([k, v]) => `${v} ${k}`).join(", ") || "unknown"));
-    const pops = fresh.map((t) => t.popularity || 0).sort((a, b) => a - b);
-    const med = pops.length ? pops[Math.floor(pops.length / 2)] : 0;
-    logLine(`${fresh.length} genuinely new tracks left` + (reused ? ` (${reused} also in another mix)` : "") +
-      (pops.length ? ` · median popularity ${med}, ${Math.round(100 * pops.filter((p) => p >= 85).length / pops.length)}% are big hits` : ""));
-    // Don't give up here. The top-up stages below exist for exactly this, and
-    // the last of them fills from Spotify's own version of the mix, so a mix
-    // can always be built. This used to throw instead, which is why mixes
-    // whose artists you almost all know -- your rap mixes -- failed outright
-    // and then showed "building..." forever on the Home page.
-    if (!fresh.length)
-      logLine("nothing passed the strict filter — every artist here is one you already play");
-
-    // If the strict pass can't fill the mix, loosen in stages rather than
-    // hand back a short playlist. Each stage is a little less "new" than the
-    // one before, so it's logged: you should know when the tail of a mix was
-    // filled by artists you already play. Top up to the full size -- the
-    // slice below trims whatever the familiar tracks don't need.
-    if (fresh.length < total) {
-      const strict = fresh.length;
-      const have = new Set(fresh.map((t) => t.uri));
-      const pool = candidates.filter((t) => t?.uri && !have.has(t.uri) && !known.tracks.has(t.uri) && (t.popularity || 0) >= POP_FLOOR && fits(t));
-      let capUp = 0, knownUp = 0;
-
-      // stage 1: more songs from the new artists we already found
-      for (const t of pool) {
-        if (fresh.length >= total) break;
-        if (offTheme(t) || (t.artists || []).some((a) => known.artists.has(a.uri || a.id))) continue;
-        const key = t.artists?.[0]?.uri ?? "?";
-        if ((perArtist.get(key) || 0) >= maxPerArtist + 2) continue;
-        perArtist.set(key, (perArtist.get(key) || 0) + 1);
-        t.why = "top-up:new-artist";
-        have.add(t.uri); fresh.push(t); capUp++;
-      }
-      // stage 2: songs you haven't played, by artists Spotify put in THIS mix.
-      // Not "any artist you know" -- that's precisely how rap got into J-Pop.
-      //
-      // Sorted toward the middle of the popularity range rather than taking
-      // the pool's order, which was popularity-first. If a mix is going to be
-      // filled with artists you already play, it should at least be their
-      // album tracks and not the singles you've heard a thousand times.
-      // Picked with the same era-aware, jittered scoring as the strict pass
-      // and the same popularity target -- this used to aim lower, which read
-      // as "album tracks only" -- and capped per artist. A plain sort here
-      // was deterministic, so with a big pool every rebuild would still pick
-      // the identical fifty.
-      const DEEP_TARGET = POP_TARGET;
-      const deepScore = (t) => {
-        const plays = playsOf(t);
-        return -Math.abs((t.popularity || 0) - DEEP_TARGET) * 1.5
-          - (plays ? Math.max(0, Math.log10(plays) - FAMOUS_FROM) * FAMOUS_WEIGHT : UNKNOWN_PENALTY)
-          - ERA_PENALTY * (eraCount.get(eraOf(t)) || 0)
-          - SPREAD_PENALTY * (used.get(t.uri) || 0)
-          + Math.random() * JITTER * 2;
-      };
-      const byDepth = pool.filter((t) => !have.has(t.uri) && !offTheme(t) && sourcePrimary.has(t.artists?.[0]?.uri));
-      while (byDepth.length && fresh.length < total) {
-        let bi = 0, bs = -Infinity;
-        for (let k = 0; k < byDepth.length; k++) { const sc = deepScore(byDepth[k]); if (sc > bs) { bs = sc; bi = k; } }
-        const t = byDepth.splice(bi, 1)[0];
-        const key = t.artists?.[0]?.uri ?? "?";
-        if ((perArtist.get(key) || 0) >= maxPerArtist + 1) continue;
-        perArtist.set(key, (perArtist.get(key) || 0) + 1);
-        eraCount.set(eraOf(t), (eraCount.get(eraOf(t)) || 0) + 1);
-        t.why = "top-up:mix-artist"; t.year = yearOf(t);
-        have.add(t.uri); fresh.push(t); knownUp++;
-      }
-
-      // stage 3: anything left in the pool that still fits the theme. The
-      // artist cap holds here too. This stage used to ignore it on the theory
-      // that a couple of extra songs by one artist beat a short mix; with a
-      // pool that now holds whole discographies, "a couple" became eleven
-      // Drakes, ten Kanyes and nine Kendricks in one Daily Mix. Short wins.
-      let anyUp = 0;
-      for (const t of shuffle(pool)) {
-        if (fresh.length >= total) break;
-        if (have.has(t.uri) || offTheme(t)) continue;
-        const key = t.artists?.[0]?.uri ?? "?";
-        if ((perArtist.get(key) || 0) >= maxPerArtist + 1) continue;
-        perArtist.set(key, (perArtist.get(key) || 0) + 1);
-        t.why = "top-up:any"; t.year = yearOf(t);
-        have.add(t.uri); fresh.push(t); anyUp++;
-      }
-
-      if (capUp || knownUp || anyUp)
-        logLine(`strict pass gave ${strict} — topped up: +${capUp} more from the new artists, ` +
-          `+${knownUp} unheard songs by this mix's own artists` + (anyUp ? `, +${anyUp} remaining candidates` : ""));
-      if (fresh.length < total)
-        logLine(`recommender only offered ${candidates.length} candidates — filling the rest from the mix itself`);
-    }
+    if (fresh.length < total) logLine(`  ${total - fresh.length} short — filled from Spotify's own mix below`);
 
     // A few tracks you know, spread through rather than front-loaded -- but
     // only ones whose artist the recommender ALSO returned for this playlist.
@@ -1122,7 +1057,7 @@ window.__betterMixExtensionLoaded = true;
   let enabled = (() => { try { return localStorage.getItem(ENABLED_KEY) !== "false"; } catch { return true; } })();
   // Bump when the selection rules change. Mixes built under older rules get
   // rebuilt automatically at the next startup instead of waiting a day.
-  const RULES_VERSION = 14;  // 14: popularity aimed at 70-82, floor 62
+  const RULES_VERSION = 15;  // 15: the mix's own artists first, similar artists a capped minority, nobody else
   const readCurrent = () => { try { return JSON.parse(localStorage.getItem(CUR_KEY)) || []; } catch { return []; } };
 
   // Keep the store bounded. It was 1.5 MB at 78 mixes and grew with every
