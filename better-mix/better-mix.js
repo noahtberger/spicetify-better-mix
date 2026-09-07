@@ -1101,7 +1101,7 @@ window.__betterMixExtensionLoaded = true;
   // mix Spotify ever showed, rewritten on every build. A mix whose source
   // hasn't been on Home in 30 days is dropped unless it was saved; a hard cap
   // on unsaved entries, newest first, is the backstop.
-  const STORE_CAP = 120;
+  const STORE_CAP = 180;   // must exceed the number of mixes Spotify makes (127 seen); below that, the prune after every pass evicted a few, which came due again, forever
   function pruneStore(reason) {
     const store = readVirtual();
     const live = new Set([...spotifyMixes().map((m) => m.uri), ...readCurrent().map((m) => m.uri)]);
