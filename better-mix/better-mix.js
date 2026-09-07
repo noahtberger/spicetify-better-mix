@@ -81,6 +81,16 @@ window.__betterMixExtensionLoaded = true;
 
   const P = () => Spicetify.Platform;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // Every Spotify call goes through this. None of them time out on their own,
+  // and a build holds an exclusive lock, so one request that never returns
+  // freezes not just its own mix but every rebuild after it until Spotify is
+  // reloaded. Patching individual calls kept missing new ones; this wraps the
+  // pattern instead.
+  const timed = (promise, ms, label) => Promise.race([
+    Promise.resolve(promise),
+    new Promise((_, rej) => setTimeout(() => rej(new Error(`${label} timed out after ${ms / 1000}s`)), ms)),
+  ]);
   let logLine = () => {};
 
   const SET_KEY = "better-mix:settings";
@@ -110,7 +120,7 @@ window.__betterMixExtensionLoaded = true;
 
   async function playlistTracks(uri) {
     const t0 = Date.now();
-    const c = await P().PlaylistAPI.getContents(uri);
+    const c = await timed(P().PlaylistAPI.getContents(uri), 15000, "reading a playlist");
     logLine(`  read playlist: ${(c?.items || []).length} tracks in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
     return c?.items || [];
   }
@@ -128,7 +138,7 @@ window.__betterMixExtensionLoaded = true;
       let batch;
       const t0 = Date.now();
       try {
-        batch = await P().PlaylistAPI.getRecommendedTracks(uri, 0, limit);
+        batch = await timed(P().PlaylistAPI.getRecommendedTracks(uri, 0, limit), 20000, "the recommender");
       } catch (e) {
         if (limit > 50) { extenderMax = limit = 50; call--; continue; }
         throw new Error(`recommender refused this playlist (HTTP ${e?.status ?? "?"})`);
@@ -165,13 +175,13 @@ window.__betterMixExtensionLoaded = true;
       (t?.artists || []).forEach((a) => a && artists.add(a.uri || a.id));
     };
     try {   // recently played comes back as bare URI strings -- no artist data
-      const recent = await P().AssistedCurationAPI.getRecentlyPlayedTracks({ limit: 50 });
+      const recent = await timed(P().AssistedCurationAPI.getRecentlyPlayedTracks({ limit: 50 }), 15000, "recently played");
       (recent || []).forEach((u) => typeof u === "string" && tracks.add(u));
     } catch (e) { logLine("recently-played unavailable: " + e.message); }
 
     try {   // the whole library, not the first page of it
       for (let off = 0; off < 5000; off += 500) {
-        const lib = await P().LibraryAPI.getTracks({ limit: 500, offset: off });
+        const lib = await timed(P().LibraryAPI.getTracks({ limit: 500, offset: off }), 20000, "your library");
         const items = lib?.items || [];
         items.forEach(note);
         if (items.length < 500) break;
@@ -179,7 +189,7 @@ window.__betterMixExtensionLoaded = true;
     } catch (e) { logLine("library unavailable: " + e.message); }
 
     try {   // every track in every playlist you made
-      const rl = await P().RootlistAPI.getContents({ limit: 200 });
+      const rl = await timed(P().RootlistAPI.getContents({ limit: 200 }), 15000, "your playlists");
       const mine = (rl?.items || []).filter((x) => String(x?.uri).includes(":playlist:")).slice(0, 60);
       for (const pl of mine) {
         try { (await playlistTracks(pl.uri)).forEach(note); } catch {}
@@ -240,11 +250,6 @@ window.__betterMixExtensionLoaded = true;
     // Every request gets a deadline. Without one, a single call that never
     // resolves hangs the whole build -- and because a build holds the lock,
     // that also blocks every later build until Spotify is reloaded.
-    const withTimeout = (promise, ms) => Promise.race([
-      promise,
-      new Promise((_, rej) => setTimeout(() => rej(new Error("timed out")), ms)),
-    ]);
-
     // A ceiling on the whole lookup too, so a slow network degrades the mix
     // rather than stopping it: whatever arrived in time gets used, the rest
     // are treated as unknown and looked up on a later build.
@@ -258,7 +263,7 @@ window.__betterMixExtensionLoaded = true;
         if (Date.now() > deadline) return;
         const uri = missing[i++];
         try {
-          const r = await withTimeout(G.Request(G.Definitions.getTrack, { uri }), 8000);
+          const r = await timed(G.Request(G.Definitions.getTrack, { uri }), 8000, "a release-date lookup");
           const t = r?.data?.trackUnion;
           meta.set(uri, [t?.albumOfTrack?.date?.year ?? null, Number(t?.playcount) || null]);
         } catch (e) {
@@ -695,7 +700,9 @@ window.__betterMixExtensionLoaded = true;
         progress.current.push(m.name); emitProgress();
         logLine(`\n=== ${m.name} ===`);
         try {
-          const tracks = await buildMix({ sourceUri: m.uri, sourceName: m.name, total, familiarCount, maxPerArtist, used });
+          const tracks = await timed(
+            buildMix({ sourceUri: m.uri, sourceName: m.name, total, familiarCount, maxPerArtist, used }),
+            4 * 60 * 1000, `building ${m.name}`);
           tracks.forEach((t) => used.set(t.uri, (used.get(t.uri) || 0) + 1));
           const name = "Better " + m.name.replace(/^better\s+/i, "");
           const prev = store.find((x) => x.sourceUri === m.uri);
