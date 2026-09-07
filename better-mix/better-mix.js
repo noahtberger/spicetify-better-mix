@@ -647,14 +647,19 @@ window.__betterMixExtensionLoaded = true;
         have.add(t.uri); fresh.push(t); knownUp++;
       }
 
-      // stage 3: anything left in the pool that still fits the theme, artist
-      // cap ignored. By here we're choosing between a short mix and a couple
-      // of extra songs by one artist -- the extra songs win.
+      // stage 3: anything left in the pool that still fits the theme. The
+      // artist cap holds here too. This stage used to ignore it on the theory
+      // that a couple of extra songs by one artist beat a short mix; with a
+      // pool that now holds whole discographies, "a couple" became eleven
+      // Drakes, ten Kanyes and nine Kendricks in one Daily Mix. Short wins.
       let anyUp = 0;
-      for (const t of pool) {
+      for (const t of shuffle(pool)) {
         if (fresh.length >= total) break;
         if (have.has(t.uri) || offTheme(t)) continue;
-        t.why = "top-up:any";
+        const key = t.artists?.[0]?.uri ?? "?";
+        if ((perArtist.get(key) || 0) >= maxPerArtist + 1) continue;
+        perArtist.set(key, (perArtist.get(key) || 0) + 1);
+        t.why = "top-up:any"; t.year = yearOf(t);
         have.add(t.uri); fresh.push(t); anyUp++;
       }
 
@@ -689,9 +694,18 @@ window.__betterMixExtensionLoaded = true;
     const want = total - familiar.length;
     if (out.length < want) {
       const have = new Set([...out, ...familiar].map((t) => t.uri));
-      const filler = shuffle(source.filter((t) => t?.uri && !have.has(t.uri) && !offTheme(t)));
-      const added = filler.slice(0, want - out.length);
-      added.forEach((t) => { t.why = "from the original mix"; });
+      // Same cap as every other stage; a mix that comes up short is logged,
+      // and it beats one artist taking a quarter of the tracklist.
+      const added = [];
+      for (const t of shuffle(source.filter((t) => t?.uri && !have.has(t.uri) && !offTheme(t)))) {
+        if (out.length + added.length >= want) break;
+        const key = t.artists?.[0]?.uri ?? "?";
+        if ((perArtist.get(key) || 0) >= maxPerArtist + 1) continue;
+        perArtist.set(key, (perArtist.get(key) || 0) + 1);
+        t.why = "from the original mix"; added.push(t);
+      }
+      if (out.length + added.length < want)
+        logLine(`short by ${want - out.length - added.length}: nothing left under the ${maxPerArtist + 1}-per-artist cap`);
       out = out.concat(added);
       if (added.length) logLine(`filled the last ${added.length} from Spotify's own ${sourceName || "mix"}`);
     }
