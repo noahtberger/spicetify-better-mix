@@ -501,8 +501,8 @@ window.__betterMixExtensionLoaded = true;
 
   // 1. Aim at a popularity BAND, not the top. Big enough to be listenable,
   //    not so big it's unavoidable. Distance outside the band costs points.
-  const POP_TARGET = 66;
-  const POP_BAND = 12;      // free inside +/- this, penalised beyond
+  const POP_TARGET = 76;    // where Kendrick, Travis, 21 Savage and Uzi sit; Drake and Kanye are ~82
+  const POP_BAND = 6;       // free inside +/- this (70-82), penalised beyond
 
   // 2. Exclude one-hit wonders outright rather than scoring around them: an
   //    artist with a single track in the pool, and that track a big hit, is a
@@ -511,7 +511,7 @@ window.__betterMixExtensionLoaded = true;
   //    artists with deep catalogues in Spotify's recommendations are exactly
   //    the mainstream ones.)
   const OHW_POP = 70;       // a lone track above this is a famous single
-  const POP_FLOOR = 52;     // below this (~30M plays) a song is obscure, whoever it's by
+  const POP_FLOOR = 62;     // below this a song is obscure, whoever it's by (The Game, Twista and Cordae live here)
   const UNKNOWN_PENALTY = 18; // no play count on file: don't let it win by default
 
   // 3. Vary between rebuilds. Scoring was fully deterministic, so pressing
@@ -1083,7 +1083,7 @@ window.__betterMixExtensionLoaded = true;
   let enabled = (() => { try { return localStorage.getItem(ENABLED_KEY) !== "false"; } catch { return true; } })();
   // Bump when the selection rules change. Mixes built under older rules get
   // rebuilt automatically at the next startup instead of waiting a day.
-  const RULES_VERSION = 13;  // 13: fit filter (related + same league and era), popularity floor, hits no longer punished
+  const RULES_VERSION = 14;  // 14: popularity aimed at 70-82, floor 62
   const readCurrent = () => { try { return JSON.parse(localStorage.getItem(CUR_KEY)) || []; } catch { return []; } };
 
   // Keep the store bounded. It was 1.5 MB at 78 mixes and grew with every
