@@ -211,6 +211,52 @@ window.__betterMixExtensionLoaded = true;
   // --- The algorithm ---------------------------------------------------------
   const shuffle = (a) => a.map((v) => [Math.random(), v]).sort((x, y) => x[0] - y[0]).map((p) => p[1]);
 
+  // --- Track metadata ------------------------------------------------------
+  // The recommender gives a 0-100 popularity score, which for anything outside
+  // your library mostly means "everyone has heard this". GraphQL's getTrack
+  // gives two far better numbers: the album's release year, and the actual
+  // play count. A release year never changes and a play count barely does, so
+  // this is cached permanently -- the first full build pays for it once.
+  const META_KEY = "better-mix:trackmeta";
+  const meta = (() => {
+    try { return new Map(Object.entries(JSON.parse(localStorage.getItem(META_KEY)) || {})); }
+    catch { return new Map(); }
+  })();
+  const saveMeta = () => {
+    try {
+      // Cap it: 20k tracks is far more than a library's worth of candidates.
+      const entries = [...meta.entries()].slice(-20000);
+      localStorage.setItem(META_KEY, JSON.stringify(Object.fromEntries(entries)));
+    } catch (e) { console.warn("[better-mix] couldn't save track metadata", e); }
+  };
+
+  async function fetchMeta(uris) {
+    const G = Spicetify.GraphQL;
+    if (!G?.Definitions?.getTrack) return;
+    const missing = [...new Set(uris)].filter((u) => u && !meta.has(u));
+    if (!missing.length) return;
+    logLine(`  looking up ${missing.length} release dates…`);
+
+    // Eight at a time: enough to be quick, gentle enough not to be throttled.
+    let i = 0;
+    const worker = async () => {
+      while (i < missing.length) {
+        const uri = missing[i++];
+        try {
+          const r = await G.Request(G.Definitions.getTrack, { uri });
+          const t = r?.data?.trackUnion;
+          meta.set(uri, [t?.albumOfTrack?.date?.year ?? null, Number(t?.playcount) || null]);
+        } catch {
+          meta.set(uri, [null, null]);   // remember the failure, don't retry every build
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: 8 }, worker));
+    saveMeta();
+  }
+  const yearOf = (t) => meta.get(t?.uri)?.[0] ?? null;
+  const playsOf = (t) => meta.get(t?.uri)?.[1] ?? null;
+
   // --- Ranking ---------------------------------------------------------------
   // Raw popularity was the wrong signal. It measures how much a track is
   // streamed right now, which for a song outside your library mostly means
@@ -234,6 +280,22 @@ window.__betterMixExtensionLoaded = true;
   // 3. Vary between rebuilds. Scoring was fully deterministic, so pressing
   //    rebuild returned the same songs in the same order every time.
   const JITTER = 7;
+
+  // 4. Penalise by real play count, on a log scale -- the difference between
+  //    2M and 20M plays matters, between 800M and 900M doesn't.
+  const FAMOUS_FROM = 8.2;   // log10 plays (~160M) where a song is unavoidable
+  const FAMOUS_WEIGHT = 34;
+
+  // 5. Spread across eras instead of filtering by age. Nothing is excluded for
+  //    being old; a bucket just gets harder to add to as it fills, so one era
+  //    can't crowd out the rest. Same mechanism as the cross-mix spread.
+  const ERA_PENALTY = 9;
+  const eraOf = (t) => {
+    const y = yearOf(t);
+    if (!y) return "unknown";
+    const age = new Date().getFullYear() - y;
+    return age <= 2 ? "new" : age <= 5 ? "recent" : age <= 12 ? "older" : "classic";
+  };
 
   // 3. A track already used in another mix costs points, so the same famous
   //    handful doesn't fill everything. Soft, not a ban: genuinely similar
@@ -273,6 +335,7 @@ window.__betterMixExtensionLoaded = true;
     logLine("asking Spotify what fits this playlist…");
     const candidates = await recommend(sourceUri, Math.max(120, total * 4));
     if (!candidates.length) throw new Error("The recommender returned nothing for this playlist.");
+    await fetchMeta(candidates.map((t) => t.uri));
 
     // Artist-aware script guard. Plenty of Japanese artists release with
     // romanised titles ("Kabutomushi — aiko", "Teenager Forever — King Gnu"),
@@ -302,15 +365,31 @@ window.__betterMixExtensionLoaded = true;
     const depthOf = (t) => Math.max(0, ...artistKeys(t).map((k) => depth.get(k) || 0));
     const oneHitWonder = (t) => depthOf(t) <= 1 && (t.popularity || 0) >= OHW_POP;
 
+    // Filled as tracks are picked, so each era gets progressively harder to
+    // add to. Counted here rather than globally: balance within a mix.
+    const eraCount = new Map();
+
     const score = (t) => {
       const pop = t.popularity || 0;
-      // Distance outside the band is the dominant term now: a song everyone
-      // knows should lose to a decent one they don't, not edge it out.
       const outside = Math.max(0, Math.abs(pop - POP_TARGET) - POP_BAND);
-      return -outside * 2.2 + Math.random() * JITTER
-        - SPREAD_PENALTY * (used.get(t.uri) || 0);
+      const plays = playsOf(t);
+      const famous = plays ? Math.max(0, Math.log10(plays) - FAMOUS_FROM) * FAMOUS_WEIGHT : 0;
+      return -outside * 2.2
+        - famous
+        - ERA_PENALTY * (eraCount.get(eraOf(t)) || 0)
+        - SPREAD_PENALTY * (used.get(t.uri) || 0)
+        + Math.random() * JITTER;
     };
-    for (const t of candidates.sort((a, b) => score(b) - score(a))) {
+    // Eras fill as we go, so a track's score depends on what's already been
+    // picked -- take the best remaining each pass rather than sorting once.
+    const remaining = candidates.slice();
+    while (remaining.length) {
+      let bi = 0, bs = -Infinity;
+      for (let k = 0; k < remaining.length; k++) {
+        const sc = score(remaining[k]);
+        if (sc > bs) { bs = sc; bi = k; }
+      }
+      const t = remaining.splice(bi, 1)[0];
       if (known.tracks.has(t.uri)) { cutTrack++; continue; }
       if ((t.artists || []).some((a) => known.artists.has(a.uri || a.id))) { cutArtist++; continue; }
       if (offTheme(t)) { cutTheme++; continue; }
@@ -319,7 +398,9 @@ window.__betterMixExtensionLoaded = true;
       const key = t.artists?.[0]?.uri ?? "?";
       if ((perArtist.get(key) || 0) >= maxPerArtist) { cutCap++; continue; }
       perArtist.set(key, (perArtist.get(key) || 0) + 1);
+      eraCount.set(eraOf(t), (eraCount.get(eraOf(t)) || 0) + 1);
       t.why = "new";
+      t.year = yearOf(t);
       fresh.push(t);
     }
 
@@ -327,6 +408,9 @@ window.__betterMixExtensionLoaded = true;
       (theme ? `, -${cutTheme} off-script (${rescued} romanised tracks kept via their artists)` : "") +
       (cutOHW ? `, -${cutOHW} one-hit wonders` : ""));
     const reused = fresh.filter((t) => used.get(t.uri)).length;
+    const eras = {};
+    fresh.forEach((t) => { const e = eraOf(t); eras[e] = (eras[e] || 0) + 1; });
+    logLine("  eras: " + (Object.entries(eras).map(([k, v]) => `${v} ${k}`).join(", ") || "unknown"));
     const pops = fresh.map((t) => t.popularity || 0).sort((a, b) => a - b);
     const med = pops.length ? pops[Math.floor(pops.length / 2)] : 0;
     logLine(`${fresh.length} genuinely new tracks left` + (reused ? ` (${reused} also in another mix)` : "") +
@@ -490,6 +574,7 @@ window.__betterMixExtensionLoaded = true;
     album: { name: t.album?.name || "", uri: t.album?.uri || null },
     image: t.album?.imageUrl || t.album?.largeImageUrl || null,
     popularity: t.popularity ?? null,
+    year: t.year ?? null,
     why: t.why || null,       // which rule let it in -- so a bad pick is traceable
   });
 
@@ -667,7 +752,7 @@ window.__betterMixExtensionLoaded = true;
   let enabled = (() => { try { return localStorage.getItem(ENABLED_KEY) !== "false"; } catch { return true; } })();
   // Bump when the selection rules change. Mixes built under older rules get
   // rebuilt automatically at the next startup instead of waiting a day.
-  const RULES_VERSION = 7;
+  const RULES_VERSION = 8;
   const readCurrent = () => { try { return JSON.parse(localStorage.getItem(CUR_KEY)) || []; } catch { return []; } };
 
   // Keep the store bounded. It was 1.5 MB at 78 mixes and grew with every
