@@ -1,7 +1,7 @@
 [
   {
     "name": "Better Mix",
-    "description": "Every mix Spotify makes for you, rebuilt daily without the songs you already play: popular tracks by artists you don't listen to, shown on Home in place of Spotify's rows, each with its own playlist-style page.",
+    "description": "Every mix Spotify makes for you, rebuilt daily around the same artists minus the songs you already play, plus a few similar artists you don't. Shown on Home in place of Spotify's rows, each with its own playlist-style page.",
     "readme": "README.md",
     "preview": "preview.png",
     "branch": "main",
