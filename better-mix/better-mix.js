@@ -729,11 +729,19 @@ window.__betterMixExtensionLoaded = true;
       return n;
     };
 
+    // A mix named by decade means it: release year is on file for nearly
+    // every track, so a 70s Mix gets 1970-1979 and nothing else. A track
+    // whose year is unknown is out rather than guessed in.
+    const dm = /\b(?:(19|20)(\d)0s|(\d)0s)\b/i.exec(sourceName || "");
+    const decade = dm ? (() => { const st = dm[1] ? Number(dm[1] + dm[2] + "0") : (Number(dm[3]) >= 3 ? 1900 : 2000) + Number(dm[3]) * 10; return [st, st + 9]; })() : null;
+    let cutDecade = 0;
+    if (decade) logLine(`decade mix: only ${decade[0]}-${decade[1]} releases`);
     const usable = candidates.filter((t) => {
       if (!t?.uri) return false;
       if (known.tracks.has(t.uri)) { cutTrack++; return false; }
       if (offTheme(t)) { cutTheme++; return false; }
       if ((t.popularity || 0) < POP_FLOOR) { cutLow++; return false; }
+      if (decade) { const y = yearOf(t); if (!y || y < decade[0] || y > decade[1]) { cutDecade++; return false; } }
       return true;
     });
     const own = usable.filter((t) => sourcePrimary.has(lead(t)));
@@ -755,7 +763,8 @@ window.__betterMixExtensionLoaded = true;
       (gateOn ? "" : " (none: no artist data to judge similarity, so the mix keeps to its own artists)"));
     logLine(`  cut: -${cutTrack} already played, -${cutLow} obscure, -${cutCap} over the artist cap` +
       (cutArtist ? `, -${cutArtist} your artists from other mixes` : "") + (cutFit ? `, -${cutFit} unrelated to this mix` : "") +
-      (cutOHW ? `, -${cutOHW} one-hit wonders` : "") + (theme ? `, -${cutTheme} off-script (${rescued} romanised tracks kept)` : ""));
+      (cutOHW ? `, -${cutOHW} one-hit wonders` : "") + (decade ? `, -${cutDecade} outside ${decade[0]}-${decade[1]}` : "") +
+      (theme ? `, -${cutTheme} off-script (${rescued} romanised tracks kept)` : ""));
     const eras = {};
     fresh.forEach((t) => { const e = eraOf(t); eras[e] = (eras[e] || 0) + 1; });
     logLine("  eras: " + (Object.entries(eras).map(([k, v]) => `${v} ${k}`).join(", ") || "unknown"));
@@ -1097,7 +1106,7 @@ window.__betterMixExtensionLoaded = true;
   let enabled = (() => { try { return localStorage.getItem(ENABLED_KEY) !== "false"; } catch { return true; } })();
   // Bump when the selection rules change. Mixes built under older rules get
   // rebuilt automatically at the next startup instead of waiting a day.
-  const RULES_VERSION = 17;  // 17: BPM mixes stay inside Spotify's own suggestions
+  const RULES_VERSION = 18;  // 18: decade mixes hold to their decade
   const readCurrent = () => { try { return (JSON.parse(localStorage.getItem(CUR_KEY)) || []).filter((m) => !LEAVE_ALONE.test(String(m?.name || ""))); } catch { return []; } };
 
   // Keep the store bounded. It was 1.5 MB at 78 mixes and grew with every
