@@ -761,20 +761,21 @@ window.__betterMixExtensionLoaded = true;
     const ownCap = (t) => Math.min(maxPerArtist + 1, tally.get(lead(t)) || 1);
     const a = pick(own, { cap: ownCap, limit: total, why: "mix artist" });
     let b = 0;
+    let similarPool = [];
     if (gateOn) {
-      const similarPool = others.filter((t) => {
+      similarPool = others.filter((t) => {
         if ((t.artists || []).some((x) => known.artists.has(x.uri || x.id))) { cutArtist++; return false; }
         if (!fits(t)) { cutFit++; return false; }
         if (oneHitWonder(t)) { cutOHW++; return false; }
         return true;
       });
       b = pick(similarPool, { cap: maxPerArtist, limit: Math.round(total * SIMILAR_SHARE), why: "similar artist" });
-      // Short? Similar artists may take more than their share before anything
-      // looser happens: they at least fit.
-      if (fresh.length < total) b += pick(similarPool, { cap: maxPerArtist, limit: total, why: "similar artist" });
     }
-    // Still short: one more song each from the mix's own artists. A fourth
-    // Drake beats a 44-song mix; a thirteenth never comes back.
+    // Short? Loosen in Noah's order: one more song each from the mix's own
+    // artists first (a fourth Drake beats a 44-song mix; a thirteenth never
+    // comes back), then the original under a looser cap, then similar
+    // artists beyond their share, then the original with no cap. The last
+    // three happen below, once the familiar songs are in.
     let a2 = 0;
     if (fresh.length < total) a2 = pick(own, { cap: (t) => ownCap(t) + 1, limit: total, why: "mix artist" });
 
@@ -826,10 +827,7 @@ window.__betterMixExtensionLoaded = true;
       // and it beats one artist taking a quarter of the tracklist.
       const added = [];
       const filler = shuffle(source.filter((t) => t?.uri && !have.has(t.uri) && !offTheme(t)));
-      // Two rounds: under a slightly looser artist cap, then -- if the mix is
-      // still short -- whatever the original has left. A full mix of songs
-      // Spotify chose for it beats a short one.
-      for (const cap of [maxPerArtist + 2, Infinity]) {
+      const fromOriginal = (cap) => {
         for (const t of filler) {
           if (out.length + added.length >= want) break;
           if (added.includes(t)) continue;
@@ -838,7 +836,15 @@ window.__betterMixExtensionLoaded = true;
           perArtist.set(key, (perArtist.get(key) || 0) + 1);
           t.why = "from the original mix"; added.push(t);
         }
+      };
+      fromOriginal(maxPerArtist + 2);                       // the original, looser cap
+      if (out.length + added.length < want && gateOn) {   // similar artists beyond their share
+        const before = fresh.length;
+        const more = pick(similarPool.filter((t) => !have.has(t.uri)), { cap: maxPerArtist, limit: want - out.length - added.length, why: "similar artist" });
+        fresh.slice(before).forEach((t) => { have.add(t.uri); added.push(t); });
+        if (more) logLine(`  +${more} similar artists beyond their share`);
       }
+      fromOriginal(Infinity);                               // the original, whatever's left
       if (out.length + added.length < want)
         logLine(`short by ${want - out.length - added.length}: the original has nothing left either`);
       out = out.concat(added);
@@ -1141,7 +1147,7 @@ window.__betterMixExtensionLoaded = true;
   let enabled = (() => { try { return localStorage.getItem(ENABLED_KEY) !== "false"; } catch { return true; } })();
   // Bump when the selection rules change. Mixes built under older rules get
   // rebuilt automatically at the next startup instead of waiting a day.
-  const RULES_VERSION = 21;  // 21: always fill to size -- looser caps in stages before running short
+  const RULES_VERSION = 22;  // 22: fill order: own artists +1, original (loose cap), similar beyond share, original (no cap)
   const readCurrent = () => { try { return (JSON.parse(localStorage.getItem(CUR_KEY)) || []).filter((m) => !LEAVE_ALONE.test(String(m?.name || ""))); } catch { return []; } };
 
   // Keep the store bounded. It was 1.5 MB at 78 mixes and grew with every
