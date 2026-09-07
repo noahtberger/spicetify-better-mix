@@ -677,6 +677,22 @@ window.__betterMixExtensionLoaded = true;
   // Spotify already sorts these by mood and activity -- Chill Happy, Driving,
   // Melancholy. Reusing their grouping is far better than trying to cluster
   // your library into moods, and the names come out meaningful for free.
+  // Failures by source, so the Home row can show "couldn't build" with the
+  // reason instead of a placeholder that looks like work in progress forever.
+  // Written here (this file owns every better-mix:* key), read by the rows.
+  const FAIL_KEY = "better-mix:failed";
+  const readFailed = () => { try { return JSON.parse(localStorage.getItem(FAIL_KEY)) || {}; } catch { return {}; } };
+  const noteFailure = (uri, name, reason) => {
+    const f = readFailed(); f[uri] = { name, reason, at: new Date().toISOString() };
+    try { localStorage.setItem(FAIL_KEY, JSON.stringify(f)); } catch {}
+    window.dispatchEvent(new Event("better-mix:updated"));
+  };
+  const clearFailure = (uri) => {
+    const f = readFailed(); if (!(uri in f)) return;
+    delete f[uri];
+    try { localStorage.setItem(FAIL_KEY, JSON.stringify(f)); } catch {}
+  };
+
   let progress = { active: false, done: 0, total: 0, current: [] };
   const emitProgress = () => window.dispatchEvent(new CustomEvent("better-mix:progress", { detail: { ...progress } }));
   const fmtSecs = (ms) => { const x = Math.round(ms / 1000); return x >= 60 ? `${Math.floor(x / 60)}m ${x % 60}s` : `${x}s`; };
@@ -729,9 +745,12 @@ window.__betterMixExtensionLoaded = true;
           logLine(`built "${name}" (${tracks.length} tracks) in ${fmtSecs(Date.now() - t1)}: ` +
             Object.entries(byWhy).map(([k, v]) => `${v} ${k}`).join(", "));
           done.push(name);
+          clearFailure(m.uri);
         } catch (e) {
           const where = e?.requestUrl ? ` at ${String(e.requestUrl).split("/").slice(-2).join("/")}` : "";
-          logLine(`skipped — ${e?.message || e?.name || e}${e?.status ? ` (HTTP ${e.status})` : ""}${where}`);
+          const reason = `${e?.message || e?.name || e}${e?.status ? ` (HTTP ${e.status})` : ""}${where}`;
+          logLine(`skipped — ${reason}`);
+          noteFailure(m.uri, m.name, reason);
         } finally {
           progress.done++; progress.current = progress.current.filter((n) => n !== m.name); emitProgress();
         }
@@ -1227,6 +1246,10 @@ window.__betterMixExtensionLoaded = true;
   const CUR_KEY = "home-mixes:current";
   const readCurrent = () => { try { return JSON.parse(localStorage.getItem(CUR_KEY)) || []; } catch { return []; } };
   function writeCurrent(list) {
+    // Spotify shows the same mix in several shelves; record it once, or every
+    // sighting gets its own card and its own slot in the "N of M" counter.
+    const seenUri = new Set();
+    list = list.filter((m) => !seenUri.has(m.uri) && seenUri.add(m.uri));
     const next = JSON.stringify(list.map((m) => ({ uri: m.uri, name: m.name, shelf: m.shelf || "" })));
     let prev = null; try { prev = localStorage.getItem(CUR_KEY); } catch {}
     if (prev === next) return;
@@ -1305,6 +1328,26 @@ window.__betterMixExtensionLoaded = true;
 
   const icon = (name) =>
     `<svg viewBox="0 0 16 16" fill="currentColor">${Spicetify.SVGIcons[name] || ""}</svg>`;
+
+  const readFailed = () => { try { return JSON.parse(localStorage.getItem("better-mix:failed")) || {}; } catch { return {}; } };
+
+  // A build that failed looked identical to one in progress -- "building…"
+  // forever. Say what happened and offer a retry.
+  function failedCard(name, uri, reason) {
+    const el = document.createElement("div");
+    el.className = "hmx-card hmx-failed";
+    el.innerHTML = `
+      <div class="hmx-art"><div class="hmx-fallback hmx-fallback-failed">!</div></div>
+      <div class="hmx-name" title="${esc(reason)}">${esc(name)}</div>
+      <div class="hmx-meta"><span title="${esc(reason)}">couldn't build</span><button class="hmx-save">retry</button></div>`;
+    el.querySelector(".hmx-save").onclick = async (e) => {
+      e.stopPropagation();
+      el.querySelector(".hmx-meta span").textContent = "rebuilding…";
+      try { await window.BetterMix?.rebuildOne?.(uri); }
+      catch (err) { Spicetify.showNotification(err?.message || String(err), true); }
+    };
+    return el;
+  }
 
   // Shown while a mix is still being built, so the row never looks like
   // Spotify's simply vanished.
@@ -1389,7 +1432,8 @@ window.__betterMixExtensionLoaded = true;
       </div>`;
     row.querySelector(".hmx-showall").onclick = () => Spicetify.Platform.History.push("/better-mix");
     const strip = row.querySelector(".hmx-strip");
-    items.forEach((m) => strip.appendChild(m.pending ? pendingCard(m.name) : card(m)));
+    items.forEach((m) => strip.appendChild(
+      m.failed ? failedCard(m.name, m.uri, m.failed) : m.pending ? pendingCard(m.name) : card(m)));
 
     // Arrows like Spotify's shelves. A scrollbar assumes a trackpad; with a
     // mouse there's nothing to swipe, so the far end of the row was
@@ -1420,11 +1464,14 @@ window.__betterMixExtensionLoaded = true;
     // still building show as placeholders. Split into Daily Mixes and the rest.
     const store = readVirtual();
     const current = readCurrent();
-    const entryFor = (c) => ({
-      shelf: c.shelf || "",
-      ...(store.find((m) => m.sourceUri === c.uri) ||
-          { pending: true, name: "Better " + String(c.name).replace(/^better\s+/i, "") }),
-    });
+    const failed = readFailed();
+    const entryFor = (c) => {
+      const built = store.find((m) => m.sourceUri === c.uri);
+      const name = "Better " + String(c.name).replace(/^better\s+/i, "");
+      if (built) return { shelf: c.shelf || "", ...built };
+      if (failed[c.uri]) return { shelf: c.shelf || "", failed: failed[c.uri].reason, uri: c.uri, name };
+      return { shelf: c.shelf || "", pending: true, name };
+    };
     // Daily row: EVERY Daily Mix we know about, in number order, whether or
     // not Spotify's shelf happens to be showing it right now -- they're all
     // rebuilt daily regardless. Other row: the mood/artist mixes on Home today.
@@ -1550,6 +1597,8 @@ window.__betterMixExtensionLoaded = true;
     .hmx-save { background: transparent; border: 1px solid var(--spice-misc, #555); color: var(--spice-subtext, #b3b3b3); border-radius: 12px; padding: 2px 10px; font-size: 11px; font-weight: 700; cursor: pointer; }
     .hmx-save:hover { border-color: var(--spice-button, #1ed760); color: var(--spice-text, #fff); }
     .hmx-pending { opacity: .7; }
+    .hmx-fallback-failed { background: var(--spice-card, #282828); color: var(--spice-notification-error, #cf4a3c); font-size: 48px; }
+    .hmx-failed .hmx-meta span { color: var(--spice-notification-error, #cf4a3c); }
     .hmx-shimmer { background: linear-gradient(110deg, var(--spice-card, #222) 30%, var(--spice-highlight, #333) 50%, var(--spice-card, #222) 70%);
                    background-size: 200% 100%; animation: hmx-shimmer 1.4s linear infinite; }
     @keyframes hmx-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
