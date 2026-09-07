@@ -2,10 +2,11 @@
 
 **Have you ever felt that Spotify's mixes are lacking?** 
 
-Better Mix takes every mix Spotify makes for you, asks Spotify what fits it, then throws out
-everything you already listen to — your library, your recent plays, the mix's
-own artists. What's left is popular music by artists you *don't* play, ranked
-by popularity, with a few songs you know spread through it.
+Better Mix rebuilds every mix Spotify makes for you around the same artists,
+minus everything you already play — your library, your playlists, your recent
+listening. What's left is the songs by those artists you haven't heard yet,
+plus a few similar artists you don't play, with a handful of songs you know
+spread through it.
 
 ![Your daily mixes and Your mixes, replacing Spotify's own rows on Home](preview.png)
 
@@ -76,12 +77,20 @@ does.
 
 ## How it decides
 
-For each of Spotify's mixes it asks their recommender what fits, then drops
-every candidate you've played recently, everything in your library, and
-anything by an artist already in that mix. Survivors are ranked by popularity,
-capped at two per artist, and a track already used in another mix is penalised
-so the same few songs don't fill everything. A handful of songs you know are
-spliced through so it doesn't open like a stranger's playlist.
+Each of Spotify's mixes is rebuilt around its own artists. Most of the new mix
+is songs by those artists that you haven't played, up to three each, with the
+artists that dominate Spotify's version filling first. A minority is similar
+artists you don't play — only ones Spotify relates to several of the mix's
+artists, who are in their league now, and who show up on the same editorial
+playlists. Nobody outside that circle gets in, however good the song, and
+nothing under a popularity floor, so no obscure album cuts. A few songs you
+know are spread through so it doesn't open like a stranger's playlist, and no
+artist plays twice in a row.
+
+Some mixes are defined by things a Spotify client can't see. A mix named for a
+decade holds to that decade. A mix named for a mood or an activity keeps 40%
+of Spotify's own picks. Mixes named by BPM are left exactly as Spotify made
+them.
 
 Every track records which rule let it in, visible on hover in the tracklist.
 
