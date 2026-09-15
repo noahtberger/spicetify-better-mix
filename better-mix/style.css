@@ -76,6 +76,8 @@
 .bmx-rowplay { position: absolute; right: 0; top: 50%; transform: translateY(-50%); display: none; color: var(--spice-text, #fff); font-size: 16px; }
 .bmx-tr:hover .bmx-idx { visibility: hidden; }
 .bmx-tr:hover .bmx-rowplay { display: inline-flex; }
+.bmx-tr.bmx-now .bmx-tname { color: var(--spice-button, #1ed760); }
+.bmx-tr.bmx-now .bmx-idx { color: var(--spice-button, #1ed760); }
 .bmx-titlecell { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .bmx-thumb { width: 40px; height: 40px; border-radius: 4px; object-fit: cover; flex: 0 0 40px; background: var(--spice-misc, #333); display: block; }
 .bmx-tt { display: flex; flex-direction: column; min-width: 0; }

@@ -17,6 +17,25 @@
 const h = (...a) => Spicetify.React.createElement(...a);
 const useState = (...a) => Spicetify.React.useState(...a);
 const useEffect = (...a) => Spicetify.React.useEffect(...a);
+
+// The current track, its context and whether it's paused, refreshed on the
+// player's own events. Without this the page had no idea anything was
+// playing, so the play button never became a pause button.
+const readPlayer = () => {
+  const d = Spicetify.Player?.data || {};
+  return { uri: d.item?.uri || null, context: d.context?.uri || null,
+           paused: d.isPaused ?? !(Spicetify.Player?.isPlaying?.() ?? false) };
+};
+const useNowPlaying = () => {
+  const [now, setNow] = useState(readPlayer);
+  useEffect(() => {
+    const on = () => setNow(readPlayer());
+    Spicetify.Player.addEventListener("songchange", on);
+    Spicetify.Player.addEventListener("onplaypause", on);
+    return () => { Spicetify.Player.removeEventListener("songchange", on); Spicetify.Player.removeEventListener("onplaypause", on); };
+  }, []);
+  return now;
+};
 const ROUTE = "/better-mix";
 
 const readStore = () => { try { return JSON.parse(localStorage.getItem("better-mix:virtual")) || []; } catch { return []; } };
@@ -48,6 +67,7 @@ const ago = (iso) => {
 // instead of being 16px glyphs scaled up (which fattened every stroke).
 const ICONS = {
   play:  { vb: 24, p: '<path d="m7.05 3.606 13.49 7.788a.7.7 0 0 1 0 1.212L7.05 20.394A.7.7 0 0 1 6 19.788V4.212a.7.7 0 0 1 1.05-.606"/>' },
+  pause: { vb: 24, p: '<path d="M5.7 3a.7.7 0 0 0-.7.7v16.6a.7.7 0 0 0 .7.7h2.6a.7.7 0 0 0 .7-.7V3.7a.7.7 0 0 0-.7-.7zm10 0a.7.7 0 0 0-.7.7v16.6a.7.7 0 0 0 .7.7h2.6a.7.7 0 0 0 .7-.7V3.7a.7.7 0 0 0-.7-.7z"/>' },
   // Spotify's download ring, reused as the circle for save / saved.
   ring:  { vb: 24, p: '<path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M1 12C1 5.925 5.925 1 12 1s11 4.925 11 11-4.925 11-11 11S1 18.075 1 12"/>' },
   plus:  { vb: 24, p: '<path d="M11 7h2v4h4v2h-4v4h-2v-4H7v-2h4z"/>' },
@@ -252,6 +272,18 @@ function MixPage({ mix }) {
     BM?.play ? BM.play(mix, i, { order: tracks.map((t) => t.uri) })
              : Spicetify.showNotification("Better Mix isn't loaded", true);
 
+  // "This mix is playing" = the current track is one of its tracks AND the
+  // player's context is one of the labels a virtual mix plays under.
+  const now = useNowPlaying();
+  const contexts = new Set(["spotify:app:better-mix", mix.savedUri, mix.sourceUri].filter(Boolean));
+  const thisMix = !!now.uri && contexts.has(now.context) && (mix.tracks || []).some((t) => t.uri === now.uri);
+  const playingHere = thisMix && !now.paused;
+  const toggle = () => {
+    if (playingHere) return Spicetify.Player.pause();
+    if (thisMix) return Spicetify.Player.play();   // resume where it was, don't start over
+    return play(0);
+  };
+
   const save = async () => {
     // A toggle, not a link: the green check undoes the save. Going to the
     // playlist is the separate "Open playlist" button beside it.
@@ -286,14 +318,15 @@ function MixPage({ mix }) {
         h("div", { className: "bmx-hero-text" },
           h("span", { className: "bmx-eyebrow" }, "Better Mix"),
           h("h1", { className: "bmx-title" }, mix.name),
-          h("p", { className: "bmx-desc" }, `Popular songs that fit ${mix.sourceName || "this mix"}, by artists you don't already play.`),
+          h("p", { className: "bmx-desc" }, `${mix.sourceName || "This mix"}, rebuilt around its artists with songs you haven't played.`),
           h("div", { className: "bmx-stats" },
             h("b", null, "You"), ` • ${all.length} songs${total ? `, ${fmtTotal(total)}` : ""}${mix.builtAt ? ` • built ${ago(mix.builtAt)}` : ""}`))),
 
       // Icon buttons with tooltips, like Spotify's -- text links read as
       // web-page furniture next to their controls.
       h("div", { className: "bmx-actions" },
-        h("button", { className: "bmx-playbtn", title: "Play", "aria-label": "Play", onClick: () => play(0) }, sicon("play")),
+        h("button", { className: "bmx-playbtn", title: playingHere ? "Pause" : "Play", "aria-label": playingHere ? "Pause" : "Play", onClick: toggle },
+          sicon(playingHere ? "pause" : "play")),
         iconBtn("shuffle", shuffled ? "Disable shuffle" : "Enable shuffle", toggleShuffle, shuffled ? "bmx-on" : ""),
         iconBtn(mix.savedUri ? ["ring", "check"] : ["ring", "plus"],
           mix.savedUri ? "Remove the saved playlist from your library" : "Save as a playlist",
@@ -339,10 +372,12 @@ function MixPage({ mix }) {
         h("span", null, "#"), h("span", null, "Title"), h("span", null, "Album"), icon("clock", "bmx-svg bmx-clock")),
       !tracks.length && h("p", { className: "bmx-empty" }, `No songs match "${query}".`),
       tracks.map((t, i) =>
-        h("div", { className: "bmx-tr", key: t.uri || i, onClick: () => play(i), title: "Play from here" },
+        h("div", { className: "bmx-tr" + (thisMix && now.uri === t.uri ? " bmx-now" : ""), key: t.uri || i,
+            onClick: () => (thisMix && now.uri === t.uri) ? (now.paused ? Spicetify.Player.play() : Spicetify.Player.pause()) : play(i),
+            title: thisMix && now.uri === t.uri ? (now.paused ? "Play" : "Pause") : "Play from here" },
           h("span", { className: "bmx-num", title: t.why ? `admitted as: ${t.why}` : "" },
             h("span", { className: "bmx-idx" }, i + 1),
-            icon("play", "bmx-svg bmx-rowplay")),
+            icon(thisMix && now.uri === t.uri && !now.paused ? "pause" : "play", "bmx-svg bmx-rowplay")),
           h("span", { className: "bmx-titlecell" },
             view === "compact" ? null
               : t.image ? h("img", { className: "bmx-thumb", src: t.image, alt: "" }) : h("span", { className: "bmx-thumb" }),
